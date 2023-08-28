@@ -4,6 +4,9 @@ error() {
 	echo "Error:" "$@" 1>&2
 }
 
+name=build-environment
+tag=$(date +%s)
+
 # If Docker socket is not mounted
 if [[ ! -S /var/run/docker.sock ]]; then
 	error "Please bind mount in the docker socket to /var/run/docker.sock"
@@ -21,5 +24,8 @@ if ! [ -x "$(command -v outrun)" ]; then
 	pip3 install outrun
 fi
 
-docker build -t alpine-latest .
-docker run -d --name alpine-latest -it alpine-latest
+docker build -t "$name:$tag" .
+
+if ! docker ps --format '{{.Names}}' | grep -w "$name" &>/dev/null; then
+	docker run -d -p 8080:22 --name "$name" -it "$name:$tag"
+fi
