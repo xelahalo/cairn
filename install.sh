@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 
+source .env
+
 error() {
 	echo "Error:" "$@" 1>&2
 }
 
-name=build-environment
 tag=$(date +%s)
 
 # If Docker socket is not mounted
@@ -24,8 +25,8 @@ if ! [ -x "$(command -v outrun)" ]; then
 	pip3 install outrun
 fi
 
-docker build -t "$name:$tag" .
+docker build -t "$IMAGE_NAME:$tag" .
 
-if ! docker ps --format '{{.Names}}' | grep -w "$name" &>/dev/null; then
-	docker run -d -p 8080:22 --name "$name" -it "$name:$tag"
+if ! docker ps --format '{{.Names}}' | grep -w "$CONTAINER_NAME" &>/dev/null; then
+	docker run -d -p 8080:22 --name "$CONTAINER_NAME" -it "$IMAGE_NAME:$tag"
 fi
