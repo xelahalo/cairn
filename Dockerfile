@@ -1,7 +1,7 @@
 FROM ubuntu:latest
 
 RUN apt-get update && \
-    apt-get install -y openssh-server python3-pip fuse3 && \
+    apt-get install -y openssh-server python3-pip fuse3 git sudo kmod && \
     pip3 install outrun && \
     rm -rf /var/lib/apt/lists/* && \
     mkdir /var/run/sshd
