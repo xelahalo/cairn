@@ -17,8 +17,11 @@ if ! [ -x "$(command -v outrun)" ]; then
 	pip3 install outrun
 fi
 
-docker build -t "$IMAGE_NAME:$tag" .
+#docker build -t "$IMAGE_NAME:$tag" .
+#
+#if ! docker ps --format '{{.Names}}' | grep -w "$CONTAINER_NAME" &>/dev/null; then
+#	docker run -d -p 8080:22 --name "$CONTAINER_NAME" -it "$IMAGE_NAME:$tag"
+#fi
 
-if ! docker ps --format '{{.Names}}' | grep -w "$CONTAINER_NAME" &>/dev/null; then
-	docker run -d -p 8080:22 --name "$CONTAINER_NAME" -it "$IMAGE_NAME:$tag"
-fi
+docker compose down
+docker compose up -d

@@ -5,7 +5,7 @@ services:
     container_name: build-host
     privileged: true
     build:
-      context: .
+      context: ./host
     image: host-image
     networks:
       - build-network
@@ -14,7 +14,7 @@ services:
     container_name: build-environment
     privileged: true
     build:
-      context: .
+      context: ./target
     image: build-environment-image
     networks:
       - build-network
