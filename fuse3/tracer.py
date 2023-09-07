@@ -23,6 +23,7 @@ class Tracer(Operations):
 
     # Logging
     # =======
+
     def __call__(self, op, path, *args):
         self.log.info("-> %s %s %s", op, path, repr(args))
         ret = "[Unhandled Exception]"
@@ -35,7 +36,7 @@ class Tracer(Operations):
             ret = str(e)
             raise
         finally:
-            self.log.debug("<- %s %s %s", op, path, repr(ret))
+            self.log.info("<- %s %s %s", op, path, repr(ret))
 
     # Helpers
     # =======
@@ -177,10 +178,17 @@ class Tracer(Operations):
         return self.flush(path, fh)
 
 
-def main(mountpoint, root):
-    logging.basicConfig(level=logging.DEBUG)
-    FUSE(Tracer(root), mountpoint, nothreads=True, foreground=True, allow_other=True)
+def main(root, mountpoint):
+    logging.basicConfig(level=logging.DEBUG, filename=f"{root}/tracer.log")
+    FUSE(
+        Tracer(root),
+        mountpoint,
+        nothreads=True,
+        foreground=True,
+        allow_other=True,
+        nonempty=True,
+    )
 
 
 if __name__ == "__main__":
-    main(sys.argv[2], sys.argv[1])
+    main(sys.argv[1], sys.argv[2])
