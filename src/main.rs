@@ -7,11 +7,11 @@ fn main() {
     // env::set_var("RUST_BACKTRACE", "full");
     let args = Cli::parse();
 
-    exec_stream("/bin/bash", vec!("cairn.sh", args.mntdir.as_str()))
+    exec_stream("/bin/bash", vec!("cairn.sh", args.cmd.as_str()))
 }
 
 // Execute command and stream its output to stdout
-pub fn exec_stream<P: AsRef<Path>>(binary: P, args: Vec<&'static str>) {
+pub fn exec_stream<P: AsRef<Path>>(binary: P, args: Vec<&str> ) {
     let mut cmd = Command::new(binary.as_ref())
         .args(&args)
         .stdout(Stdio::piped())
@@ -33,7 +33,7 @@ pub fn exec_stream<P: AsRef<Path>>(binary: P, args: Vec<&'static str>) {
 
 #[derive(Parser)]
 struct Cli {
-    mntdir: String,
+    cmd: String,
 }
 
 

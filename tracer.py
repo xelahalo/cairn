@@ -184,7 +184,7 @@ def main(root, mountpoint):
         Tracer(root),
         mountpoint,
         nothreads=True,
-        foreground=True,
+        # foreground=True,
         allow_other=True,
         nonempty=True,
     )
