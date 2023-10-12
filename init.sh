@@ -39,8 +39,9 @@ fi
 docker build -t "build-env:test" .
 docker run \
 	--rm \
+	--detach \
 	--privileged \
 	--mount type=bind,source="$(pwd)$mountpoint",target=/usr/src/dockermount,bind-propagation=rshared \
 	--cap-add SYS_ADMIN \
 	--name "build-env" \
-	-it "build-env:test"
+	-it "build-env:test" 
