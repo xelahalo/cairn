@@ -15,7 +15,7 @@ impl<'a> App<'a> {
             println!("Executing command: {:?}", command);
             command.execute()?;
             // wait 1 second
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            // std::thread::sleep(std::time::Duration::from_secs(1));
         }
 
         Ok(())
