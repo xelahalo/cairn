@@ -1,0 +1,32 @@
+name: benchmark
+
+on:
+  push:
+    branches:
+      - benchmark
+
+jobs:
+  benchmark:
+    runs-on: self-hosted
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v2
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+
+    - name: Build and install the app
+      run: cargo install --path .
+
+    - name: Start the docker container
+      run: bash init.sh /mnt
+
+    - name: Run the benchmark suite
+      run: bash benchmark/run.sh
+
+    - name: Publish results
+      run: bash benchmark/publish.sh
+
