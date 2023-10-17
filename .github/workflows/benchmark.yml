@@ -28,5 +28,6 @@ jobs:
       run: bash benchmark/run.sh
 
     - name: Publish results
+      if: success()
       run: bash benchmark/publish.sh
 
