@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# chroot /usr/src/fusemount
+# start the tracer
 python tracer.py /usr/src/dockermount /usr/src/fusemount
 
 # mount relevant dirs
