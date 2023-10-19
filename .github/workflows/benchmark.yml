@@ -36,8 +36,8 @@ jobs:
       if: steps.docker-status.outputs.container_running == 'false'
       run: bash init.sh /mnt
 
-    - name: Run the benchmark suite
-      run: bash benchmarks/run.sh
+    - name: Run stage 1 benchmarks
+      run: bash benchmarks/run.sh stage_1
 
     - name: Publish results
       if: success()
