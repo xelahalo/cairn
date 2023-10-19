@@ -21,7 +21,19 @@ jobs:
     - name: Build and install the app
       run: cargo install --path .
 
+    - name: Check Docker Container Status
+      id: docker-status
+      run: |
+        if docker ps -f "name=build-env" | grep -q "build-env"; then
+          echo "Container build-env is running."
+          echo "::set-output name=container_running::true"
+        else
+          echo "Container build-env is not running."
+          echo "::set-output name=container_running::false"
+        fi
+
     - name: Start the docker container
+      if: steps.docker-status.outputs.container_running == 'false'
       run: bash init.sh /mnt
 
     - name: Run the benchmark suite
