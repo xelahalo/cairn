@@ -7,21 +7,21 @@ fi
 
 STAGE=$1
 COMMIT_HASH=$(git log -1 --pretty=%h)
-BENCHMARK_NAME=$(date +%Y-%m-%d_%H:%M:%S)_$COMMIT_HASH
+BENCHMARK_NAME=$(date +%Y-%m-%d_%H-%M-%S)_$COMMIT_HASH
 
 # for each directory in stage_1
 for d in benchmarks/$STAGE/*; do
 		EXECUTABLE=$(basename $d)
-		cp $d/$EXECUTABLE mnt/workdir
+		cp $d/$EXECUTABLE mnt/workdir/
 
 		# for each dir for the executable
 		for f in $d/*; do
-				# if it is a directory (benchmark test)
-				if [ -d $f ]; then
+				# if it is a directory other then results
+				if [ -d "$f" ] && [ $(basename $f) != "results" ]; then
 
 					# copy the benchmark test to the workdir
-					rsync -av $f/ mnt/workdir
-					cd mnt/workdir
+					rsync -av $f/ mnt/workdir/
+					cd mnt/workdir/
 
 					# STEP 1: Benchmark it locally
 					chmod +x run.sh && bench './run.sh' --json local_$BENCHMARK_NAME.json
@@ -42,13 +42,13 @@ for d in benchmarks/$STAGE/*; do
 					mkdir -p benchmarks/$STAGE/results/$EXECUTABLE/$(basename $f)
 					mv mnt/workdir/*$BENCHMARK_NAME.json benchmarks/$STAGE/$EXECUTABLE/$(basename $f)/
 
-					# clean the workdir
-					find mnt/workdir -not -name '.gitkeep' -exec rm -rv {} + -depth
+					# clean up workdir
+					find mnt/workdir/ -type f ! -name ".gitkeep" -exec rm {} \;
 				fi
 		done
 done
 
 # zip the results
 cd benchmarks/$STAGE/results
-zip -r $BENCHMARK_NAME.zip $BENCHMARK_NAME
+zip -r $BENCHMARK_NAME.zip *
 cd ../../..
