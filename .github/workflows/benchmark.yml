@@ -25,9 +25,9 @@ jobs:
       run: bash init.sh /mnt
 
     - name: Run the benchmark suite
-      run: bash benchmark/run.sh
+      run: bash benchmarks/run.sh
 
     - name: Publish results
       if: success()
-      run: bash benchmark/publish.sh
+      run: bash benchmarks/publish.sh
 
