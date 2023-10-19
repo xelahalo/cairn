@@ -39,7 +39,9 @@ jobs:
     - name: Run stage 1 benchmarks
       run: bash benchmarks/run.sh stage_1
 
-    - name: Publish results
+    - name: Publish benchmark results
       if: success()
-      run: bash benchmarks/publish.sh
-
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ github.sha }} 
+        path: benchmarks/stage_1/results/*.zip 

@@ -39,10 +39,16 @@ for d in benchmarks/$STAGE/*; do
 					cd ../..
 
 					# move the json to the benchmark directory
+					mkdir -p benchmarks/$STAGE/results/$EXECUTABLE/$(basename $f)
 					mv mnt/workdir/*$BENCHMARK_NAME.json benchmarks/$STAGE/$EXECUTABLE/$(basename $f)/
 
 					# clean the workdir
-					find mnt/workdir -not -name '.gitkeep' -delete
+					find mnt/workdir -not -name '.gitkeep' -exec rm -rv {} + -depth
 				fi
 		done
 done
+
+# zip the results
+cd benchmarks/$STAGE/results
+zip -r $BENCHMARK_NAME.zip $BENCHMARK_NAME
+cd ../../..
