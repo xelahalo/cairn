@@ -10,6 +10,10 @@ jobs:
     runs-on: self-hosted
 
     steps:
+    - name: Tear down the previous docker container
+      id: docker-status
+      run: bash teardown.sh
+
     - name: Check out code
       uses: actions/checkout@v2
 
@@ -21,19 +25,7 @@ jobs:
     - name: Build and install the app
       run: cargo install --path .
 
-    - name: Check Docker Container Status
-      id: docker-status
-      run: |
-        if docker ps -f "name=build-env" | grep -q "build-env"; then
-          echo "Container build-env is running."
-          echo "::set-output name=container_running::true"
-        else
-          echo "Container build-env is not running."
-          echo "::set-output name=container_running::false"
-        fi
-
     - name: Start the docker container
-      if: steps.docker-status.outputs.container_running == 'false'
       run: bash init.sh /mnt
 
     - name: Run stage 1 benchmarks
@@ -44,4 +36,4 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: ${{ github.sha }} 
-        path: benchmarks/stage_1/results/*.zip 
+        path: benchmarks/*.zip 
