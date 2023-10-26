@@ -50,7 +50,7 @@ fn main() -> Result<(), AppError> {
     }.trim_matches(|c| c == '\'' || c == '"');
 
     let init_cmd = command::Command::new("bash", vec!["init.sh", MNT_DIR]);
-    let build_cmd = command::Command::new("docker", vec!["exec", "-it", container, "chroot", CHROOT_DIR, "/bin/bash", "-c", format!("cd {} && {}", WORK_DIR, parsed_cmd).as_str()]);
+    let build_cmd = command::Command::new("docker", vec!["exec", container, "chroot", CHROOT_DIR, "/bin/bash", "-c", format!("cd {} && {}", WORK_DIR, parsed_cmd).as_str()]);
     let teardown_cmd = command::Command::new("bash", vec!["teardown.sh"]);
 
     let app = if container_given {

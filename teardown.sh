@@ -1,6 +1,6 @@
 #!/bin/bash
 
-docker stop build-env  
+docker container kill build-env
 
 cd mnt
 ./clean.sh

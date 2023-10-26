@@ -10,6 +10,10 @@ jobs:
     runs-on: self-hosted
 
     steps:
+    - name: Tear down the previous docker container
+      id: docker-status
+      run: bash teardown.sh
+
     - name: Check out code
       uses: actions/checkout@v2
 
@@ -24,10 +28,12 @@ jobs:
     - name: Start the docker container
       run: bash init.sh /mnt
 
-    - name: Run the benchmark suite
-      run: bash benchmark/run.sh
+    - name: Run stage 1 benchmarks
+      run: bash benchmarks/run.sh stage_1
 
-    - name: Publish results
+    - name: Publish benchmark results
       if: success()
-      run: bash benchmark/publish.sh
-
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ github.sha }} 
+        path: benchmarks/*.zip 
