@@ -11,41 +11,41 @@ BENCHMARK_NAME=$(date +%Y-%m-%d_%H-%M-%S)_$COMMIT_HASH
 
 # for each directory in stage_1
 for d in benchmarks/$STAGE/*; do
-		EXECUTABLE=$(basename $d)
+	EXECUTABLE=$(basename $d)
 
-		# for each dir for the executable
-		for f in $d/*; do
-				# if it is a directory 
-				if [ -d "$f" ] ; then
-					# copy the benchmark test to the workdir
-					rsync -av $f/ mnt/workdir/
-					cp $d/$EXECUTABLE mnt/workdir/
-					cd mnt/workdir/
+	# for each dir for the executable
+	for f in $d/*; do
+		# if it is a directory 
+		if [ -d "$f" ] ; then
+			# copy the benchmark test to the workdir
+			rsync -av $f/ mnt/workdir/
+			cp $d/$EXECUTABLE mnt/workdir/
+			cd mnt/workdir/
 
-					# STEP 1: Benchmark it locally
-					chmod +x run.sh && hyperfine --warmup 3 './run.sh' --export-json local_$BENCHMARK_NAME.json
+			# STEP 1: Benchmark it locally
+			chmod +x run.sh && hyperfine --warmup 3 './run.sh' --export-json local_$BENCHMARK_NAME.json
 
-					# STEP 2: Benchmark it in the container
-					docker exec build-env mkdir -p /usr/src/benchmark/ 
-					docker exec build-env rsync -av /usr/src/dockermount/workdir/ /usr/src/benchmark/
-					docker exec build-env /bin/bash -c "cd /usr/src/benchmark && chmod +x run.sh && hyperfine --warmup 3 './run.sh' --export-json docker_$BENCHMARK_NAME.json"
-					docker exec build-env cp /usr/src/benchmark/docker_$BENCHMARK_NAME.json /usr/src/dockermount/workdir/
-					docker exec build-env find /usr/src/benchmark -delete
+			# STEP 2: Benchmark it in the container
+			docker exec build-env mkdir -p /usr/src/benchmark/ 
+			docker exec build-env rsync -av /usr/src/dockermount/workdir/ /usr/src/benchmark/
+			docker exec build-env /bin/bash -c "cd /usr/src/benchmark && chmod +x run.sh && hyperfine --warmup 3 './run.sh' --export-json docker_$BENCHMARK_NAME.json"
+			docker exec build-env cp /usr/src/benchmark/docker_$BENCHMARK_NAME.json /usr/src/dockermount/workdir/
+			docker exec build-env find /usr/src/benchmark -delete
 
-					# STEP 3: Benchmark it using Cairn
-					hyperfine --warmup 3 'cairn "./run.sh" --container build-env' --export-json cairn_$BENCHMARK_NAME.json
+			# STEP 3: Benchmark it using Cairn
+			hyperfine --warmup 3 'cairn "./run.sh" --container build-env' --export-json cairn_$BENCHMARK_NAME.json
 
-					cd ../..
+			cd ../..
 
-					# move the json to the benchmark directory
-					mkdir -p benchmarks/results/$EXECUTABLE/$(basename $f)
-					# copy over all the files that were used to make the benchmarks
-					rsync -av --exclude ".gitkeep" mnt/workdir/ benchmarks/results/$EXECUTABLE/$(basename $f)/
+			# move the json to the benchmark directory
+			mkdir -p benchmarks/results/$EXECUTABLE/$(basename $f)
+			# copy over all the files that were used to make the benchmarks
+			rsync -av --exclude ".gitkeep" mnt/workdir/ benchmarks/results/$EXECUTABLE/$(basename $f)/
 
-					# clean up workdir
-					find mnt/workdir \( -type d -o -type f \) ! -name ".gitkeep" -mindepth 1 -exec rm -r {} \;
-				fi
-		done
+			# clean up workdir
+			find mnt/workdir \( -type d -o -type f \) ! -name ".gitkeep" -mindepth 1 -exec rm -r {} \;
+		fi
+	done
 done
 
 # # zip the results
