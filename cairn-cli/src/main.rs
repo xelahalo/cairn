@@ -4,7 +4,7 @@ mod error;
 mod util;
 
 use crate::app::App;
-use clap::{Arg, Command};
+use clap::{crate_version, Arg, Command};
 use error::AppError;
 
 const MNT_DIR: &str = "/mnt";
@@ -15,7 +15,7 @@ const CONTAINER_NAME: &str = "build-env";
 fn main() -> Result<(), AppError> {
     let matches = Command::new("Cairn")
         .author("xelahalo <xelahalo@gmail.com>")
-        .version("0.1.0")
+        .version(crate_version!())
         .about("Tracing tool for forward build systems.")
         .arg(
             Arg::new("cmd")
@@ -33,24 +33,36 @@ fn main() -> Result<(), AppError> {
         )
         .get_matches();
 
-    let container_given: bool; 
+    let container_given: bool;
     let container: &str = match matches.get_one::<String>("container") {
         Some(container) => {
             container_given = true;
             container
-        },
+        }
         None => {
             container_given = false;
             CONTAINER_NAME
-        },
+        }
     };
     let parsed_cmd: &str = match matches.get_one::<String>("cmd") {
         Some(cmd) => cmd,
         None => panic!("No command provided"),
-    }.trim_matches(|c| c == '\'' || c == '"');
+    }
+    .trim_matches(|c| c == '\'' || c == '"');
 
     let init_cmd = command::Command::new("bash", vec!["init.sh", MNT_DIR]);
-    let build_cmd = command::Command::new("docker", vec!["exec", container, "chroot", CHROOT_DIR, "/bin/bash", "-c", format!("cd {} && {}", WORK_DIR, parsed_cmd).as_str()]);
+    let build_cmd = command::Command::new(
+        "docker",
+        vec![
+            "exec",
+            container,
+            "chroot",
+            CHROOT_DIR,
+            "/bin/bash",
+            "-c",
+            format!("cd {} && {}", WORK_DIR, parsed_cmd).as_str(),
+        ],
+    );
     let teardown_cmd = command::Command::new("bash", vec!["teardown.sh"]);
 
     let app = if container_given {
