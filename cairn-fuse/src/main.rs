@@ -18,12 +18,12 @@ use fuser::{
 use log::info;
 use log::{debug, warn};
 use log::{error, LevelFilter};
-use serde::{Deserialize, Serialize};
 use std::cmp::min;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::os::fd::AsRawFd;
 use std::os::raw::c_int;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs as ufs;
@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io};
 use walkdir::WalkDir;
+use std::ffi::CString;
 
 const BLOCK_SIZE: u64 = 512;
 const MAX_NAME_LENGTH: u32 = 255;
@@ -261,7 +262,7 @@ impl From<InodeAttributes> for fuser::FileAttr {
 struct TracerFS {
     root: String,
     data_dir: String,
-    context_map: BTreeMap<u64, InodeAttributes>,
+    attrs: BTreeMap<u64, InodeAttributes>,
 }
 
 impl TracerFS {
@@ -270,15 +271,19 @@ impl TracerFS {
             TracerFS {
                 root,
                 data_dir,
-                context_map: BTreeMap::new(),
+                attrs: BTreeMap::new(),
             }
         }
     }
 
-    fn lookup_name(&self, parent: u64, name: &OsStr) -> Result<InodeAttributes, c_int> {
-        let parent_context = self.context_map.get(&parent).unwrap();
+    fn get_path(self, parent: u64, name: &OsStr) -> PathBuf {
+        let parent_context = self.attrs.get(&parent).unwrap();
         let parent_path = Path::new(&parent_context.real_path);
-        let path = parent_path.join(name);
+        parent_path.join(name)
+    }
+
+    fn lookup_name(&self, parent: u64, name: &OsStr) -> Result<InodeAttributes, c_int> {
+        let path = self.get_path(parent, name);
         let metadata = fs::metadata(path);
         match metadata {
             Ok(metadata) => {
@@ -508,7 +513,7 @@ impl Filesystem for TracerFS {
                 metadata,
                 real_path,
             };
-            self.context_map.insert(inode, context);
+            self.attrs.insert(inode, context);
         }
 
         Ok(())
@@ -534,7 +539,7 @@ impl Filesystem for TracerFS {
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
         debug!("getattr(ino={})", ino);
 
-        match self.context_map.get(&ino) {
+        match self.attrs.get(&ino) {
             Some(attrs) => {
                 reply.attr(&Duration::new(0, 0), &(*attrs).into());
             }
@@ -552,18 +557,18 @@ impl Filesystem for TracerFS {
         uid: Option<u32>,
         gid: Option<u32>,
         size: Option<u64>,
-        _atime: Option<TimeOrNow>,
-        _mtime: Option<TimeOrNow>,
-        _ctime: Option<SystemTime>,
+        atime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
+        ctime: Option<SystemTime>,
         fh: Option<u64>,
-        _crtime: Option<SystemTime>,
-        _chgtime: Option<SystemTime>,
-        _bkuptime: Option<SystemTime>,
+        crtime: Option<SystemTime>,
+        chgtime: Option<SystemTime>,
+        bkuptime: Option<SystemTime>,
         flags: Option<u32>,
         reply: ReplyAttr,
     ) {
         // get attrs and handle it properly
-        let mut attrs = match self.context_map.get(&ino) {
+        let mut attrs = match self.attrs.get(&ino) {
             Some(attrs) => attrs,
             None => {
                 reply.error(libc::ENOENT);
@@ -578,7 +583,7 @@ impl Filesystem for TracerFS {
                 return;
             }
 
-            attrs.metadata.permissions().set_mode(mode);
+            // change file modified time
             utime::set_file_times(
                 &attrs.real_path,
                 time_from_system_time(&attrs.metadata.accessed().unwrap()).0,
@@ -586,16 +591,469 @@ impl Filesystem for TracerFS {
             )
             .unwrap();
 
-            self.context_map.insert(ino, *attrs);
+            // load new metadata
+            attrs.metadata = fs::metadata(&attrs.real_path).unwrap();
+
+            // set the mode on the new metadata
+            attrs.metadata.permissions().set_mode(mode);
+
+            // save
+            self.attrs.insert(ino, *attrs);
             reply.attr(&Duration::new(0, 0), &(*attrs).into());
             return;
         }
 
         if uid.is_some() || gid.is_some() {
-            debug!("chown() called with {:?} {:?} {:?}", inode, uid, gid);
+            debug!("chown() called with {:?} {:?} {:?}", ino, uid, gid);
 
+            ufs::chown(
+                &attrs.real_path,
+                uid,
+                gid,
+            );
+
+            attrs.metadata = fs::metadata(&attrs.real_path).unwrap();
+            self.attrs.insert(ino, *attrs);
+            reply.attr(&Duration::new(0, 0), &(*attrs).into());
+            return;
         }
 
+        if let Some(size) = size {
+            debug!("truncate() called with {:?} {:?}", ino, size);
+
+            // open file and truncate it
+            let mut file = match OpenOptions::new()
+                .write(true)
+                .open(&attrs.real_path) {
+                    Ok(file) => file,
+                    Err(err) => match err.kind() {
+                        std::io::ErrorKind::NotFound => {
+                            reply.error(libc::ENOENT);
+                            return;
+                        }
+                        std::io::ErrorKind::PermissionDenied => {
+                            reply.error(libc::EACCES);
+                            return;
+                        }
+                        std::io::ErrorKind::AlreadyExists => {
+                            reply.error(libc::EEXIST);
+                            return;
+                        }
+                        std::io::ErrorKind::InvalidInput => {
+                            reply.error(libc::EINVAL);
+                            return;
+                        }
+                        _ => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    },
+                };
+
+            file.set_len(size).unwrap();
+            attrs.metadata = file.metadata().unwrap();
+            self.attrs.insert(ino, *attrs);
+            return;
+        }
+        
+
+        let now = time_now();
+        if let Some(atime) = atime {
+            debug!("utimens() called with {:?} {:?}", ino, atime);
+
+            utime::set_file_times(
+                &attrs.real_path,
+                match atime {
+                    TimeOrNow::SpecificTime(atime) => time_from_system_time(&atime).0,
+                    TimeOrNow::Now => now.0,
+                },
+                time_from_system_time(&attrs.metadata.modified().unwrap()).0
+            );
+
+            attrs.metadata = fs::metadata(&attrs.real_path).unwrap();
+            self.attrs.insert(ino, *attrs);
+            return;
+        }
+
+        if let Some(mtime) = mtime {
+            debug!("utimens() called with {:?} {:?}", ino, mtime);
+
+            utime::set_file_times(
+                &attrs.real_path,
+                time_from_system_time(&attrs.metadata.accessed().unwrap()).0,
+                match mtime {
+                    TimeOrNow::SpecificTime(mtime) => time_from_system_time(&mtime).0,
+                    TimeOrNow::Now => now.0,
+                },
+            );
+
+            attrs.metadata = fs::metadata(&attrs.real_path).unwrap();
+            self.attrs.insert(ino, *attrs);
+            return;
+        }
+    }
+
+    fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyData) {
+        debug!("readlink(ino={})", ino);
+
+        match self.attrs.get(&ino) {
+            Some(attrs) => {
+                if attrs.metadata.file_type().is_symlink() {
+                    let path = Path::new(&attrs.real_path);
+                    let link = fs::read_link(path).unwrap();
+                    reply.data(link.as_os_str().as_bytes());
+                } else {
+                    reply.error(libc::EINVAL);
+                }
+            }
+            None => {
+                reply.error(libc::ENOENT);
+            }
+        } 
+    }
+
+    fn mknod(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            mode: u32,
+            umask: u32,
+            rdev: u32,
+            reply: ReplyEntry,
+        ) {
+        debug!("mknod(parent={}, name={:?}, mode={}, rdev={})", parent, name, mode, rdev);
+        let path = self.get_path(parent, name);
+        
+        // idk how else to do it 
+        unsafe { libc::mknod(
+            CString::new(path.to_str().unwrap()).unwrap().as_ptr(),
+            mode as u16,
+            umask as i32,
+        ) }; 
+        
+        let metadata = fs::metadata(path);
+        match metadata {
+            Ok(metadata) => {
+                let real_path = path.to_str().unwrap().to_string();
+                let context = InodeAttributes {
+                    metadata,
+                    real_path,
+                };
+                self.attrs.insert(metadata.ino(), context);
+                reply.entry(&Duration::new(0, 0), &context.into(), 0);
+            }
+            Err(e) => {
+                reply.error(e.raw_os_error().unwrap_or(libc::EIO));
+            }
+        }
+    }
+
+    fn mkdir(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            mode: u32,
+            umask: u32,
+            reply: ReplyEntry,
+        ) {
+        debug!("mkdir(parent={}, name={:?}, mode={})", parent, name, mode);
+        let path = self.get_path(parent, name);
+
+        fs::create_dir(path);
+
+        let metadata = fs::metadata(path);
+        match metadata {
+            Ok(metadata) => {
+                let real_path = path.to_str().unwrap().to_string();
+                let context = InodeAttributes {
+                    metadata,
+                    real_path,
+                };
+                self.attrs.insert(metadata.ino(), context);
+                reply.entry(&Duration::new(0, 0), &context.into(), 0);
+            }
+            Err(e) => {
+                reply.error(e.raw_os_error().unwrap_or(libc::EIO));
+            }
+        }
+    }
+
+    // TODO: remove inodes from self.attrs
+    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        debug!("unlink(parent={}, name={:?})", parent, name);
+        let path = self.get_path(parent, name);
+
+        fs::remove_file(path);
+
+        reply.ok();
+    }
+
+    // TODO: remove inodes from self.attrs
+    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        debug!("rmdir(parent={}, name={:?})", parent, name);
+        let path = self.get_path(parent, name);
+
+        fs::remove_dir(path);
+
+        reply.ok();
+    }
+
+    fn symlink(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            link: &Path,
+            reply: ReplyEntry,
+        ) {
+        debug!("symlink(parent={}, name={:?}, link={:?})", parent, name, link);
+        let path = self.get_path(parent, name);
+
+        ufs::symlink(link, path);
+
+        let metadata = fs::metadata(path);
+        match metadata {
+            Ok(metadata) => {
+                let real_path = path.to_str().unwrap().to_string();
+                let context = InodeAttributes {
+                    metadata,
+                    real_path,
+                };
+                self.attrs.insert(metadata.ino(), context);
+                reply.entry(&Duration::new(0, 0), &context.into(), 0);
+            }
+            Err(e) => {
+                reply.error(e.raw_os_error().unwrap_or(libc::EIO));
+            }
+        }
+    }
+
+    fn rename(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            newparent: u64,
+            newname: &OsStr,
+            flags: u32,
+            reply: ReplyEmpty,
+        ) {
+        debug!("rename(parent={}, name={:?}, newparent={}, newname={:?})", parent, name, newparent, newname);
+        let path = self.get_path(parent, name);
+        let newpath = self.get_path(newparent, newname);
+
+        fs::rename(path, newpath);
+
+        reply.ok();
+    }
+
+    fn link(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            newparent: u64,
+            newname: &OsStr,
+            reply: ReplyEntry,
+        ) {
+        debug!("link(ino={}, newparent={}, newname={:?})", ino, newparent, newname);
+        let path = self.get_path(ino, OsStr::new(""));
+        let newpath = self.get_path(newparent, newname);
+
+        fs::hard_link(path, newpath);
+
+        let metadata = fs::metadata(newpath);
+        match metadata {
+            Ok(metadata) => {
+                let real_path = newpath.to_str().unwrap().to_string();
+                let context = InodeAttributes {
+                    metadata,
+                    real_path,
+                };
+                self.attrs.insert(metadata.ino(), context);
+                reply.entry(&Duration::new(0, 0), &context.into(), 0);
+            }
+            Err(e) => {
+                reply.error(e.raw_os_error().unwrap_or(libc::EIO));
+            }
+        }
+    }
+
+    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+        debug!("open(ino={}, flags={})", ino, flags);
+        let (access_mask, read, write) = match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => {
+                // Behavior is undefined, but most filesystems return EACCES
+                if flags & libc::O_TRUNC != 0 {
+                    reply.error(libc::EACCES);
+                    return;
+                }
+                if flags & FMODE_EXEC != 0 {
+                    // Open is from internal exec syscall
+                    (libc::X_OK, true, false)
+                } else {
+                    (libc::R_OK, true, false)
+                }
+            }
+            libc::O_WRONLY => (libc::W_OK, false, true),
+            libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
+            // Exactly one access mode flag must be specified
+            _ => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+        
+        match self.attrs.get(&ino) {
+            Some(attrs) => {
+                if attrs.metadata.file_type().is_file() {
+                    let mut file = OpenOptions::new()
+                        .read(read)
+                        .write(write)
+                        .open(&attrs.real_path)
+                        .unwrap();
+
+                    let file_handle = file.as_raw_fd() as u64;
+                    reply.opened(file_handle, 0);
+                } else {
+                    reply.error(libc::EISDIR);
+                }
+            }
+            None => {
+                reply.error(libc::ENOENT);
+            }
+        }
+    }
+
+    fn read(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            fh: u64,
+            offset: i64,
+            size: u32,
+            flags: i32,
+            lock_owner: Option<u64>,
+            reply: ReplyData,
+        ) {
+        debug!("read(ino={}, fh={}, offset={}, size={})", ino, fh, offset, size);
+        match self.attrs.get(&ino) {
+            Some(attrs) => {
+                if attrs.metadata.file_type().is_file() {
+                    if let Ok(file) = File::open(&attrs.real_path) {
+                        let file_size = file.metadata().unwrap().len();
+                        let read_size = min(size, file_size.saturating_sub(offset as u64) as u32);
+                        let mut buffer = vec![0; size as usize];
+
+                        file.read_exact_at(&mut buffer, offset as u64).unwrap();
+                        reply.data(&buffer);
+                    } else {
+                        reply.error(libc::ENOENT)
+                    }
+                } else {
+                    reply.error(libc::EISDIR);
+                }
+            }
+            None => {
+                reply.error(libc::ENOENT);
+            }
+        }
+    }
+
+    fn write(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            fh: u64,
+            offset: i64,
+            data: &[u8],
+            write_flags: u32,
+            flags: i32,
+            lock_owner: Option<u64>,
+            reply: ReplyWrite,
+        ) {
+    
+        let attrs = self.attrs.get(&ino).unwrap();
+        if let Ok(mut file) = OpenOptions::new().write(true).open(attrs.real_path) {
+            file.write_all_at(data, offset as u64).unwrap();
+            attrs.metadata = file.metadata().unwrap();
+            self.attrs.insert(ino, *attrs);
+            reply.written(data.len() as u32);
+        } else {
+            reply.error(libc::ENOENT);
+        }
+    }
+
+    fn release(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            fh: u64,
+            flags: i32,
+            lock_owner: Option<u64>,
+            flush: bool,
+            reply: ReplyEmpty,
+        ) {
+        debug!("release(ino={}, fh={}, flags={})", ino, fh, flags);
+        reply.ok();
+    }
+
+    fn opendir(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+        debug!("opendir(ino={}, flags={})", ino, flags);
+        let (access_mask, read, write) = match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => {
+                // Behavior is undefined, but most filesystems return EACCES
+                if flags & libc::O_TRUNC != 0 {
+                    reply.error(libc::EACCES);
+                    return;
+                }
+                if flags & FMODE_EXEC != 0 {
+                    // Open is from internal exec syscall
+                    (libc::X_OK, true, false)
+                } else {
+                    (libc::R_OK, true, false)
+                }
+            }
+            libc::O_WRONLY => (libc::W_OK, false, true),
+            libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
+            // Exactly one access mode flag must be specified
+            _ => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        match self.attrs.get(&ino) {
+            Some(attrs) => {
+                if attrs.metadata.file_type().is_dir() {
+                    let mut file = OpenOptions::new()
+                        .write(write)
+                        .read(read)
+                        .open(&attrs.real_path)
+                        .unwrap();
+
+                    let file_handle = file.as_raw_fd() as u64;
+                    reply.opened(file_handle, 0);
+                } else {
+                    reply.error(libc::ENOTDIR);
+                }
+            }
+            None => {
+                reply.error(libc::ENOENT);
+            }
+        }
+    }
+
+    fn readdir(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            fh: u64,
+            offset: i64,
+            reply: ReplyDirectory,
+        ) {
+        
     }
 }
 
