@@ -1,60 +1,32 @@
 // Based on the simple.rs implementation in the fuser repo
-#![allow(clippy::needless_return)]
-#![allow(clippy::unnecessary_cast)] // libc::S_* are u16 or u32 depending on the platform
 
 use clap::{crate_version, Arg, Command};
-use fuser::consts::FOPEN_DIRECT_IO;
-#[cfg(feature = "abi-7-26")]
-use fuser::consts::FUSE_HANDLE_KILLPRIV;
-#[cfg(feature = "abi-7-31")]
-use fuser::consts::FUSE_WRITE_KILL_PRIV;
-use fuser::TimeOrNow::Now;
 use fuser::{
-    Filesystem, KernelConfig, MountOption, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
-    ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow,
-    FUSE_ROOT_ID,
+    Filesystem, KernelConfig, MountOption, ReplyAttr, ReplyData, ReplyDirectory,
+    ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request, TimeOrNow, 
 };
-#[cfg(feature = "abi-7-26")]
-use log::info;
-use log::{debug, warn};
+use log::debug;
 use log::{error, LevelFilter};
 use std::cmp::min;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader};
 use std::os::fd::AsRawFd;
 use std::os::raw::c_int;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs as ufs;
 use std::os::unix::fs::FileExt;
-#[cfg(target_os = "linux")]
-use std::os::unix::io::IntoRawFd;
 use std::os::unix::prelude::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io};
 use walkdir::WalkDir;
 use std::ffi::CString;
 
-const BLOCK_SIZE: u64 = 512;
-const MAX_NAME_LENGTH: u32 = 255;
-const MAX_FILE_SIZE: u64 = 1024 * 1024 * 1024 * 1024;
-
-// Top two file handle bits are used to store permissions
-// Note: This isn't safe, since the client can modify those bits. However, this implementation
-// is just a toy
-const FILE_HANDLE_READ_BIT: u64 = 1 << 63;
-const FILE_HANDLE_WRITE_BIT: u64 = 1 << 62;
-
-const FMODE_EXEC: i32 = 0x20;
-
 type Inode = u64;
 
-type DirectoryDescriptor = BTreeMap<Vec<u8>, (Inode, FileKind)>;
-
-#[derive(Serialize, Deserialize, Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq)]
 enum FileKind {
     File,
     Directory,
@@ -70,116 +42,6 @@ impl From<FileKind> for fuser::FileType {
         }
     }
 }
-
-// #[derive(Debug)]
-// enum XattrNamespace {
-//     Security,
-//     System,
-//     Trusted,
-//     User,
-// }
-//
-// fn parse_xattr_namespace(key: &[u8]) -> Result<XattrNamespace, c_int> {
-//     let user = b"user.";
-//     if key.len() < user.len() {
-//         return Err(libc::ENOTSUP);
-//     }
-//     if key[..user.len()].eq(user) {
-//         return Ok(XattrNamespace::User);
-//     }
-//
-//     let system = b"system.";
-//     if key.len() < system.len() {
-//         return Err(libc::ENOTSUP);
-//     }
-//     if key[..system.len()].eq(system) {
-//         return Ok(XattrNamespace::System);
-//     }
-//
-//     let trusted = b"trusted.";
-//     if key.len() < trusted.len() {
-//         return Err(libc::ENOTSUP);
-//     }
-//     if key[..trusted.len()].eq(trusted) {
-//         return Ok(XattrNamespace::Trusted);
-//     }
-//
-//     let security = b"security";
-//     if key.len() < security.len() {
-//         return Err(libc::ENOTSUP);
-//     }
-//     if key[..security.len()].eq(security) {
-//         return Ok(XattrNamespace::Security);
-//     }
-//
-//     return Err(libc::ENOTSUP);
-// }
-//
-fn clear_suid_sgid(attr: &mut InodeAttributes) {
-    attr.mode &= !libc::S_ISUID as u16;
-    // SGID is only suppose to be cleared if XGRP is set
-    if attr.mode & libc::S_IXGRP as u16 != 0 {
-        attr.mode &= !libc::S_ISGID as u16;
-    }
-}
-
-fn creation_gid(parent: &InodeAttributes, gid: u32) -> u32 {
-    if parent.mode & libc::S_ISGID as u16 != 0 {
-        return parent.gid;
-    }
-
-    gid
-}
-//
-// fn xattr_access_check(
-//     key: &[u8],
-//     access_mask: i32,
-//     inode_attrs: &InodeAttributes,
-//     request: &Request<'_>,
-// ) -> Result<(), c_int> {
-//     match parse_xattr_namespace(key)? {
-//         XattrNamespace::Security => {
-//             if access_mask != libc::R_OK && request.uid() != 0 {
-//                 return Err(libc::EPERM);
-//             }
-//         }
-//         XattrNamespace::Trusted => {
-//             if request.uid() != 0 {
-//                 return Err(libc::EPERM);
-//             }
-//         }
-//         XattrNamespace::System => {
-//             if key.eq(b"system.posix_acl_access") {
-//                 if !check_access(
-//                     inode_attrs.uid,
-//                     inode_attrs.gid,
-//                     inode_attrs.mode,
-//                     request.uid(),
-//                     request.gid(),
-//                     access_mask,
-//                 ) {
-//                     return Err(libc::EPERM);
-//                 }
-//             } else if request.uid() != 0 {
-//                 return Err(libc::EPERM);
-//             }
-//         }
-//         XattrNamespace::User => {
-//             if !check_access(
-//                 inode_attrs.uid,
-//                 inode_attrs.gid,
-//                 inode_attrs.mode,
-//                 request.uid(),
-//                 request.gid(),
-//                 access_mask,
-//             ) {
-//                 return Err(libc::EPERM);
-//             }
-//         }
-//     }
-//
-//     Ok(())
-// }
 
 fn time_now() -> (i64, u32) {
     time_from_system_time(&SystemTime::now())
@@ -257,20 +119,17 @@ impl From<InodeAttributes> for fuser::FileAttr {
     }
 }
 
-// Stores inode metadata data in "$data_dir/inodes" and file contents in "$data_dir/contents"
-// Directory data is stored in the file's contents, as a serialized DirectoryDescriptor
+// In memory storing of the attributes of the files
 struct TracerFS {
     root: String,
-    data_dir: String,
     attrs: BTreeMap<u64, InodeAttributes>,
 }
 
 impl TracerFS {
-    fn new(root: String, data_dir: String) -> TracerFS {
+    fn new(root: String) -> TracerFS {
         {
             TracerFS {
                 root,
-                data_dir,
                 attrs: BTreeMap::new(),
             }
         }
@@ -297,206 +156,6 @@ impl TracerFS {
             Err(e) => Err(e.raw_os_error().unwrap_or(libc::EIO)),
         }
     }
-
-    // fn creation_mode(&self, mode: u32) -> u16 {
-    //     (mode & !(libc::S_ISUID | libc::S_ISGID) as u32) as u16
-    // }
-
-    // fn allocate_next_inode(&self) -> Inode {
-    //     let path = Path::new(&self.data_dir).join("superblock");
-    //     let current_inode = if let Ok(file) = File::open(&path) {
-    //         bincode::deserialize_from(file).unwrap()
-    //     } else {
-    //         fuser::FUSE_ROOT_ID
-    //     };
-
-    //     let file = OpenOptions::new()
-    //         .write(true)
-    //         .create(true)
-    //         .truncate(true)
-    //         .open(&path)
-    //         .unwrap();
-    //     bincode::serialize_into(file, &(current_inode + 1)).unwrap();
-
-    //     current_inode + 1
-    // }
-
-    // fn allocate_next_file_handle(&self, read: bool, write: bool) -> u64 {
-    //     let mut fh = self.next_file_handle.fetch_add(1, Ordering::SeqCst);
-    //     // Assert that we haven't run out of file handles
-    //     assert!(fh < FILE_HANDLE_WRITE_BIT && fh < FILE_HANDLE_READ_BIT);
-    //     if read {
-    //         fh |= FILE_HANDLE_READ_BIT;
-    //     }
-    //     if write {
-    //         fh |= FILE_HANDLE_WRITE_BIT;
-    //     }
-
-    //     fh
-    // }
-
-    // fn check_file_handle_read(&self, file_handle: u64) -> bool {
-    //     (file_handle & FILE_HANDLE_READ_BIT) != 0
-    // }
-
-    // fn check_file_handle_write(&self, file_handle: u64) -> bool {
-    //     (file_handle & FILE_HANDLE_WRITE_BIT) != 0
-    // }
-
-    // fn content_path(&self, inode: Inode) -> PathBuf {
-    //     Path::new(&self.data_dir)
-    //         .join("contents")
-    //         .join(inode.to_string())
-    // }
-
-    // fn get_directory_content(&self, inode: Inode) -> Result<DirectoryDescriptor, c_int> {
-    //     let path = Path::new(&self.data_dir)
-    //         .join("contents")
-    //         .join(inode.to_string());
-    //     if let Ok(file) = File::open(path) {
-    //         Ok(bincode::deserialize_from(file).unwrap())
-    //     } else {
-    //         Err(libc::ENOENT)
-    //     }
-    // }
-
-    // fn write_directory_content(&self, inode: Inode, entries: DirectoryDescriptor) {
-    //     let path = Path::new(&self.data_dir)
-    //         .join("contents")
-    //         .join(inode.to_string());
-    //     let file = OpenOptions::new()
-    //         .write(true)
-    //         .create(true)
-    //         .truncate(true)
-    //         .open(path)
-    //         .unwrap();
-    //     bincode::serialize_into(file, &entries).unwrap();
-    // }
-
-    // fn get_inode(&self, inode: Inode) -> Result<InodeAttributes, c_int> {
-    //     let path = Path::new(&self.data_dir)
-    //         .join("inodes")
-    //         .join(inode.to_string());
-    //     if let Ok(file) = File::open(path) {
-    //         Ok(bincode::deserialize_from(file).unwrap())
-    //     } else {
-    //         Err(libc::ENOENT)
-    //     }
-    // }
-
-    // fn write_inode(&self, inode: &InodeAttributes) {
-    //     let path = Path::new(&self.data_dir)
-    //         .join("inodes")
-    //         .join(inode.inode.to_string());
-    //     let file = OpenOptions::new()
-    //         .write(true)
-    //         .create(true)
-    //         .truncate(true)
-    //         .open(path)
-    //         .unwrap();
-    //     bincode::serialize_into(file, inode).unwrap();
-    // }
-
-    // // Check whether a file should be removed from storage. Should be called after decrementing
-    // // the link count, or closing a file handle
-    // fn gc_inode(&self, inode: &InodeAttributes) -> bool {
-    //     if inode.hardlinks == 0 && inode.open_file_handles == 0 {
-    //         let inode_path = Path::new(&self.data_dir)
-    //             .join("inodes")
-    //             .join(inode.inode.to_string());
-    //         fs::remove_file(inode_path).unwrap();
-    //         let content_path = Path::new(&self.data_dir)
-    //             .join("contents")
-    //             .join(inode.inode.to_string());
-    //         fs::remove_file(content_path).unwrap();
-
-    //         return true;
-    //     }
-
-    //     return false;
-    // }
-
-    // fn truncate(
-    //     &self,
-    //     inode: Inode,
-    //     new_length: u64,
-    //     uid: u32,
-    //     gid: u32,
-    // ) -> Result<InodeAttributes, c_int> {
-    //     if new_length > MAX_FILE_SIZE {
-    //         return Err(libc::EFBIG);
-    //     }
-
-    //     let mut attrs = self.get_inode(inode)?;
-
-    //     if !check_access(attrs.uid, attrs.gid, attrs.mode, uid, gid, libc::W_OK) {
-    //         return Err(libc::EACCES);
-    //     }
-
-    //     let path = self.content_path(inode);
-    //     let file = OpenOptions::new().write(true).open(path).unwrap();
-    //     file.set_len(new_length).unwrap();
-
-    //     attrs.size = new_length;
-    //     attrs.last_metadata_changed = time_now();
-    //     attrs.last_modified = time_now();
-
-    //     // Clear SETUID & SETGID on truncate
-    //     clear_suid_sgid(&mut attrs);
-
-    //     self.write_inode(&attrs);
-
-    //     Ok(attrs)
-    // }
-
-    // fn get_path(&self, inode: Inode, name: &OsStr) -> PathBuf {
-    //     Path::new(&self.get_inode(inode).unwrap().real_path).join(name)
-    // }
-
-    // fn lookup_name(&self, parent: u64, name: &OsStr) -> Result<fs::Metadata, c_int> {
-    //     fs::metadata(self.get_path(parent, name)).map_err(|e| e.raw_os_error().unwrap_or(libc::EIO))
-    //     // let entries = self.get_directory_content(parent)?;
-    //     // if let Some((inode, _)) = entries.get(name.as_bytes()) {
-    //     //     return self.get_inode(*inode);
-    //     // } else {
-    //     //     return Err(libc::ENOENT);
-    //     // }
-    // }
-
-    // fn insert_link(
-    //     &self,
-    //     req: &Request,
-    //     parent: u64,
-    //     name: &OsStr,
-    //     inode: u64,
-    //     kind: FileKind,
-    // ) -> Result<(), c_int> {
-    //     if self.lookup_name(parent, name).is_ok() {
-    //         return Err(libc::EEXIST);
-    //     }
-
-    //     let mut parent_attrs = self.get_inode(parent)?;
-
-    //     if !check_access(
-    //         parent_attrs.uid,
-    //         parent_attrs.gid,
-    //         parent_attrs.mode,
-    //         req.uid(),
-    //         req.gid(),
-    //         libc::W_OK,
-    //     ) {
-    //         return Err(libc::EACCES);
-    //     }
-    //     parent_attrs.last_modified = time_now();
-    //     parent_attrs.last_metadata_changed = time_now();
-    //     self.write_inode(&parent_attrs);
-
-    //     let mut entries = self.get_directory_content(parent).unwrap();
-    //     entries.insert(name.as_bytes().to_vec(), (inode, kind));
-    //     self.write_directory_content(parent, entries);
-
-    //     Ok(())
-    // }
 }
 
 impl Filesystem for TracerFS {
@@ -889,7 +548,8 @@ impl Filesystem for TracerFS {
                     reply.error(libc::EACCES);
                     return;
                 }
-                if flags & FMODE_EXEC != 0 {
+                // FMODE_EXEC is 0x20
+                if flags & 0x20 != 0 {
                     // Open is from internal exec syscall
                     (libc::X_OK, true, false)
                 } else {
@@ -1051,45 +711,80 @@ impl Filesystem for TracerFS {
             ino: u64,
             fh: u64,
             offset: i64,
-            reply: ReplyDirectory,
+            mut reply: ReplyDirectory,
         ) {
-        
-    }
-}
+        debug!("readdir(ino={}, fh={}, offset={})", ino, fh, offset);
+        if let Some(attrs) = self.attrs.get(&ino) {
+            if attrs.metadata.file_type().is_dir() {
+                let mut entries = Vec::new();
+                for entry in fs::read_dir(&attrs.real_path).unwrap() {
+                    let entry = entry.unwrap();
+                    let metadata = entry.metadata().unwrap();
+                    let kind = as_file_kind(metadata.mode());
+                    let name = entry.file_name().to_str().unwrap();
+                    let inode = metadata.ino();
 
-pub fn check_access(
-    file_uid: u32,
-    file_gid: u32,
-    file_mode: u16,
-    uid: u32,
-    gid: u32,
-    mut access_mask: i32,
-) -> bool {
-    // F_OK tests for existence of file
-    if access_mask == libc::F_OK {
-        return true;
-    }
-    let file_mode = i32::from(file_mode);
+                    entries.push((inode, kind, name));
+                }
 
-    // root is allowed to read & write anything
-    if uid == 0 {
-        // root only allowed to exec if one of the X bits is set
-        access_mask &= libc::X_OK;
-        access_mask -= access_mask & (file_mode >> 6);
-        access_mask -= access_mask & (file_mode >> 3);
-        access_mask -= access_mask & file_mode;
-        return access_mask == 0;
-    }
-
-    if uid == file_uid {
-        access_mask -= access_mask & (file_mode >> 6);
-    } else if gid == file_gid {
-        access_mask -= access_mask & (file_mode >> 3);
-    } else {
-        access_mask -= access_mask & file_mode;
+                for (i, (inode, kind, name)) in entries.into_iter().enumerate() {
+                    if i as i64 >= offset {
+                        let full_name = OsStr::new(name);
+                        let buffer_full = reply.add(
+                            inode,
+                            offset + i as i64 + 1,
+                            kind.into(),
+                            &full_name,
+                        );
+                        if buffer_full {
+                            break;
+                        }
+                    }
+                }
+                reply.ok();
+            } else {
+                reply.error(libc::ENOTDIR);
+            }
+        } else {
+            reply.error(libc::ENOENT);
+        }
     }
 
-    return access_mask == 0;
+    fn releasedir(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            fh: u64,
+            flags: i32,
+            reply: ReplyEmpty,
+        ) {
+        debug!("releasedir(ino={}, fh={}, flags={})", ino, fh, flags);
+        reply.ok();
+    }
+
+    fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
+        debug!("statfs(ino={})", _ino);
+
+        let mut statfs: libc::statvfs = unsafe { std::mem::zeroed() };
+        let attrs = self.attrs.get(&_ino).unwrap();
+        let path = Path::new(&attrs.real_path);
+        let fd = path.as_os_str().to_str().unwrap();
+
+        unsafe {
+            libc::statvfs(fd.as_ptr() as *const i8, &mut statfs);
+        }
+
+        reply.statfs(
+            statfs.f_blocks.into(),
+            statfs.f_bfree.into(),
+            statfs.f_bavail.into(),
+            statfs.f_files.into(),
+            statfs.f_ffree.into(),
+            statfs.f_bsize as u32,
+            statfs.f_namemax as u32,
+            statfs.f_frsize as u32,
+        ); 
+    }
 }
 
 fn as_file_kind(mut mode: u32) -> FileKind {
@@ -1104,36 +799,6 @@ fn as_file_kind(mut mode: u32) -> FileKind {
     } else {
         unimplemented!("{}", mode);
     }
-}
-
-fn get_groups(pid: u32) -> Vec<u32> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let path = format!("/proc/{pid}/task/{pid}/status");
-        let file = File::open(path).unwrap();
-        for line in BufReader::new(file).lines() {
-            let line = line.unwrap();
-            if line.starts_with("Groups:") {
-                return line["Groups: ".len()..]
-                    .split(' ')
-                    .filter(|x| !x.trim().is_empty())
-                    .map(|x| x.parse::<u32>().unwrap())
-                    .collect();
-            }
-        }
-    }
-
-    vec![]
-}
-
-fn fuse_allow_other_enabled() -> io::Result<bool> {
-    let file = File::open("/etc/fuse.conf")?;
-    for line in BufReader::new(file).lines() {
-        if line?.trim_start().starts_with("user_allow_other") {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 // fn main() {
@@ -1249,14 +914,6 @@ fn main() {
                 .required(true),
         )
         .arg(
-            Arg::new("data-dir")
-                .long("data-dir")
-                .value_name("DIR")
-                .default_value("/tmp/cairn")
-                .help("Set local directory used to store data")
-                .required(true),
-        )
-        .arg(
             Arg::new("mount-point")
                 .help("Mountpoint for the filesystem")
                 .required(true),
@@ -1280,8 +937,9 @@ fn main() {
 
     let root = matches.get_one::<String>("root").unwrap().to_string();
     let mountpoint = matches.get_one::<String>("mount-point").unwrap();
-    let data_dir = matches.get_one::<String>("data-dir").unwrap();
-    let options = vec![MountOption::FSName("cairn-fuse".to_string())];
+    let options = vec![
+        MountOption::FSName("cairn-fuse".to_string()),
+    ];
 
     let result = fuser::mount2(TracerFS::new(root), mountpoint, &options);
 
