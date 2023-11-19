@@ -1,15 +1,15 @@
-FROM python:3.11.5-bookworm
+FROM rust:1.73-bookworm
 WORKDIR /usr/src/app
 
 RUN  mkdir /usr/src/fusemount /usr/src/dockermount
 
-ENV VIRTUAL_ENV=/opt/venv
-RUN python3 -m venv $VIRTUAL_ENV
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+# ENV VIRTUAL_ENV=/opt/venv
+# RUN python3 -m venv $VIRTUAL_ENV
+# ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 RUN apt update && \
     # hyperfine is only needed for benchmarking
-    apt install -y fuse kmod git rsync hyperfine && \
+    apt install -y fuse3 libfuse3-dev kmod rsync hyperfine && \
     # 'mknod': creates a special file
     # 'Name': /dev/fuse name of the driver 
     # '{ b | c }': c, which correspons to character-oriented device
@@ -17,8 +17,9 @@ RUN apt update && \
     # 'Minor': 299, which corresponds to the "fuse" driver
     mknod /dev/fuse c 10 299
 
-COPY tracer.py requirements.txt startup.sh ./
-RUN pip install -r requirements.txt
+COPY . .
+RUN cargo install --path ./cairn-fuse
 RUN chmod +x /usr/src/app/startup.sh
 
 CMD ["/usr/src/app/startup.sh"]
+# CMD ["/bin/bash"]

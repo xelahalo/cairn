@@ -7,44 +7,78 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'cairn'",
+            "name": "Debug executable 'cairn-cli'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=cairn",
-                    "--package=cairn",
+                    "--bin=cairn-cli",
+                    "--package=cairn-cli"
                 ],
                 "filter": {
-                    "name": "cairn",
+                    "name": "cairn-cli",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'cairn-cli'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=cairn-cli",
+                    "--package=cairn-cli"
+                ],
+                "filter": {
+                    "name": "cairn-cli",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'cairn-fuse'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=cairn-fuse",
+                    "--package=cairn-fuse"
+                ],
+                "filter": {
+                    "name": "cairn-fuse",
                     "kind": "bin"
                 }
             },
             "args": [
-                "gcc",
-                "test.c"
+                "./mnt",
+                "./temp"
             ],
             "cwd": "${workspaceFolder}"
         },
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'cairn'",
+            "name": "Debug unit tests in executable 'cairn-fuse'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=cairn",
-                    "--package=cairn"
+                    "--bin=cairn-fuse",
+                    "--package=cairn-fuse"
                 ],
                 "filter": {
-                    "name": "cairn",
+                    "name": "cairn-fuse",
                     "kind": "bin"
                 }
             },
-            "args": [
-                "gcc",
-                "test.c"
-            ],
+            "args": [],
             "cwd": "${workspaceFolder}"
         }
     ]

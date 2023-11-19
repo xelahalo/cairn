@@ -1,12 +1,12 @@
-// Based on the simple.rs implementation in the fuser repo
+// Based on https://github.com/cberner/fuser/blob/master/examples/simple.rs
 
 use clap::{crate_version, Arg, Command};
 use fuser::{
     Filesystem, KernelConfig, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request, TimeOrNow,
+    ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request, TimeOrNow, FUSE_ROOT_ID,
 };
 use log::{debug, warn};
-use log::{error, LevelFilter};
+use log::{LevelFilter};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
@@ -21,9 +21,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io};
 use walkdir::WalkDir;
 
-const FMODE_EXEC: i32 = 0x20;
+// const MNT_OPTS: &[MountOption] = &[
+//     MountOption::AllowOther,
+// ];
 
-type Inode = u64;
+const FMODE_EXEC: i32 = 0x20;
 
 #[derive(Copy, Clone, PartialEq)]
 enum FileKind {
@@ -53,6 +55,7 @@ impl From<FileKind> for fuser::FileType {
     }
 }
 
+
 fn time_now() -> (i64, u32) {
     time_from_system_time(&SystemTime::now())
 }
@@ -79,7 +82,7 @@ fn time_from_system_time(system_time: &SystemTime) -> (i64, u32) {
 #[derive(Clone)]
 struct InodeAttributes {
     // pub metadata: fs::Metadata,
-    pub ino: Inode,
+    pub ino: u64,
     pub uid: u32,
     pub gid: u32,
     pub mode: u32,
@@ -256,9 +259,16 @@ impl TracerFS {
 impl Filesystem for TracerFS {
     fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
         for entry in WalkDir::new(&self.root).into_iter().filter_map(|e| e.ok()) {
+            debug!("init() entry: {:?}", entry);
             let metadata = entry.metadata().unwrap();
             let real_path = entry.path().to_str().unwrap().to_string();
-            let inode = metadata.ino();
+
+            let inode = if real_path != self.root {
+                metadata.ino()
+            } else {
+                FUSE_ROOT_ID
+            };
+
             let attrs: InodeAttributes = (metadata, real_path).into();
 
             self.attrs.insert(inode, attrs);
@@ -684,6 +694,13 @@ impl Filesystem for TracerFS {
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
+        debug!(
+            "write(ino={}, fh={}, offset={}, size={})",
+            ino,
+            _fh,
+            offset,
+            data.len()
+        );
         let attrs = self.attrs.get(&ino).unwrap();
         if let Ok(file) = OpenOptions::new().write(true).open(&attrs.real_path) {
             file.write_all_at(data, offset as u64).unwrap();
@@ -803,11 +820,11 @@ impl Filesystem for TracerFS {
         reply.ok();
     }
 
-    fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
-        debug!("statfs(ino={})", _ino);
+    fn statfs(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyStatfs) {
+        debug!("statfs(ino={})", ino);
 
         let mut statfs: libc::statvfs = unsafe { std::mem::zeroed() };
-        let attrs = self.attrs.get(&_ino).unwrap();
+        let attrs = self.attrs.get(&ino).unwrap();
         let path = Path::new(&attrs.real_path);
         let fd = path.as_os_str().to_str().unwrap();
 
@@ -959,35 +976,93 @@ fn main() {
                 .help("Mountpoint for the filesystem")
                 .required(true),
         )
-        .arg(Arg::new("v").short('v').help("Sets the level of verbosity"))
+        // .arg(Arg::new("v").short('v').help("Sets the level of verbosity"))
         .get_matches();
 
-    let verbosity = matches.get_one::<u64>("v").unwrap();
-    let log_level = match verbosity {
-        0 => LevelFilter::Error,
-        1 => LevelFilter::Warn,
-        2 => LevelFilter::Info,
-        3 => LevelFilter::Debug,
-        _ => LevelFilter::Trace,
-    };
+    // let verbosity = matches.get_one::<u64>("v").unwrap();
+    // let verbosity
+    // let log_level = match verbosity {
+    //     0 => LevelFilter::Error,
+    //     1 => LevelFilter::Warn,
+    //     2 => LevelFilter::Info,
+    //     3 => LevelFilter::Debug,
+    //     _ => LevelFilter::Trace,
+    // };
 
     env_logger::builder()
         .format_timestamp_nanos()
-        .filter_level(log_level)
+        .filter_level(LevelFilter::Trace)
         .init();
 
     let root = matches.get_one::<String>("root").unwrap().to_string();
     let mountpoint = matches.get_one::<String>("mount-point").unwrap();
-    let options = vec![
-        MountOption::FSName("cairn-fuse".to_string()),
-        MountOption::AllowOther,
-        MountOption::CUSTOM("nothreads".to_string()),
-        MountOption::CUSTOM("nonempty".to_string()),
-    ];
 
-    let result = fuser::mount2(TracerFS::new(root), mountpoint, &options);
+    // unmount filesystem automatically when SIGINT is received
+    let (send, recv) = std::sync::mpsc::channel();
+    ctrlc::set_handler(move || {
+        debug!("Received SIGINT, unmounting filesystem");
+        send.send(()).unwrap();
+    }).unwrap();
 
-    if let Err(e) = result {
-        error!("Error mounting filesystem: {}", e);
+    let mount_options = [MountOption::AllowOther, MountOption::FSName("cairn-fuse".to_string())];
+    let guard = fuser::spawn_mount2(TracerFS::new(root), mountpoint, mount_options.as_slice()).unwrap();
+
+    recv.recv().unwrap();
+    drop(guard);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{panic, thread};
+    use std::process::Command;
+    use fuser::{MountOption, Session};
+    use tempfile::tempdir;
+    use super::{TracerFS};
+
+    const DIRS: [&str; 2] = ["./temp/mnt", "./temp/root"];
+
+    fn run_test<T>(test: T) -> () where T: FnOnce() -> () + panic::UnwindSafe {
+        setup();
+
+        // let (sender , recv) = std::sync::mpsc::channel();
+
+        let mount_options = [MountOption::AllowOther, MountOption::AutoUnmount, MountOption::FSName("cairn-fuse-test".to_string())];
+        let mut session = Session::new(TracerFS::new(DIRS[0].to_string()), DIRS[1].as_ref(), &mount_options).unwrap();
+        let mut unmounter = session.unmount_callable();
+
+        thread::spawn(move || {
+            session.run().unwrap();
+        });
+
+        thread::sleep(std::time::Duration::from_secs(1));
+
+        let result = panic::catch_unwind(|| {
+            test();
+        });
+
+        unmounter.unmount().unwrap();
+        teardown();
+        assert!(result.is_ok())
+    }
+
+    fn setup() {
+        for dir in DIRS.iter() {
+            Command::new("mkdir").args(&["-p", dir]).output().unwrap();
+        }
+
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
+    fn teardown() {
+        // somehow unmounting is not working as expected so I have to call the umount util manually
+        Command::new("umount").args(&[DIRS[0]]).output().unwrap();
+        for dir in DIRS.iter() {
+            Command::new("rm").args(&["-rf", dir]).output().unwrap();
+        }
+    }
+
+    #[test]
+    fn mount() {
+        run_test(|| {})
     }
 }
