@@ -8,10 +8,14 @@ edition = "2021"
 clap = { version = "4.4", features = ["cargo"] }
 env_logger = "0.10"
 log = "0.4"
-libc = "0.2"
+libc = "0.2.150"
 time = "0.3"
 fuser = "0.14.0"
 walkdir = "2.4"
 utime = "0.3"
 ctrlc = "3.4.1"
+
+[dev-dependencies]
+strsim = "0.10.0"
 tempfile = "3.8.1"
+chrono = "0.4.31"
