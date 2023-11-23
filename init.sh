@@ -1,7 +1,7 @@
 #!/bin/bash
 
 usage() {
-	echo "Usage: $0 [-h] <command>" 1>&2
+	echo "Usage: $0 [-h] <mountpoint>" 1>&2
 	echo "  -h: Display this help message" 1>&2
 	exit 1
 }
@@ -25,7 +25,7 @@ done
 shift $((OPTIND - 1))
 
 if [ -z "${1}" ]; then
-	echo "Command is required" 1>&2
+	echo "Mountpoint is required" 1>&2
 	usage
 fi
 
@@ -41,7 +41,7 @@ docker run \
 	--rm \
 	--detach \
 	--privileged \
-	--mount type=bind,source="$(pwd)$mountpoint",target=/usr/src/dockermount,bind-propagation=rshared \
+	--mount type=bind,source="$(pwd)/$mountpoint",target=/usr/src/dockermount,bind-propagation=rshared \
 	--cap-add SYS_ADMIN \
 	--name "build-env" \
 	-it "build-env:test" 
