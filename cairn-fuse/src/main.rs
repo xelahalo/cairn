@@ -1,15 +1,18 @@
 // Based on https://github.com/cberner/fuser/blob/master/examples/simple.rs
 
 use clap::{crate_version, Arg, Command};
+use env_logger::fmt::Formatter;
+use env_logger::Builder;
 use fuser::{
     Filesystem, KernelConfig, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty,
     ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request, TimeOrNow, FUSE_ROOT_ID,
 };
-use log::warn;
 use log::{info, LevelFilter};
+use log::{warn, Record};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::num::Wrapping;
 use std::os::fd::AsRawFd;
 use std::os::raw::c_int;
@@ -21,9 +24,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io};
 use walkdir::WalkDir;
-// const MNT_OPTS: &[MountOption] = &[
-//     MountOption::AllowOther,
-// ];
 
 const FMODE_EXEC: i32 = 0x20;
 
@@ -944,107 +944,28 @@ fn as_file_kind(mut mode: u32) -> FileKind {
     }
 }
 
-// fn main() {
-//     let matches = Command::new("Fuser")
-//         .version(crate_version!())
-//         .author("Christopher Berner")
-//         .arg(
-//             Arg::new("data-dir")
-//                 .long("data-dir")
-//                 .value_name("DIR")
-//                 .default_value("/tmp/fuser")
-//                 .help("Set local directory used to store data")
-//                 .takes_value(true),
-//         )
-//         .arg(
-//             Arg::new("mount-point")
-//                 .long("mount-point")
-//                 .value_name("MOUNT_POINT")
-//                 .default_value("")
-//                 .help("Act as a client, and mount FUSE at given path")
-//                 .takes_value(true),
-//         )
-//         .arg(
-//             Arg::new("direct-io")
-//                 .long("direct-io")
-//                 .requires("mount-point")
-//                 .help("Mount FUSE with direct IO"),
-//         )
-//         .arg(Arg::new("fsck").long("fsck").help("Run a filesystem check"))
-//         .arg(
-//             Arg::new("suid")
-//                 .long("suid")
-//                 .help("Enable setuid support when run as root"),
-//         )
-//         .arg(
-//             Arg::new("v")
-//                 .short('v')
-//                 .multiple_occurrences(true)
-//                 .help("Sets the level of verbosity"),
-//         )
-//         .get_matches();
-//
-//     let verbosity: u64 = matches.occurrences_of("v");
-//     let log_level = match verbosity {
-//         0 => LevelFilter::Error,
-//         1 => LevelFilter::Warn,
-//         2 => LevelFilter::Info,
-//         3 => LevelFilter::Debug,
-//         _ => LevelFilter::Trace,
-//     };
-//     env_logger::builder()
-//         .format_timestamp_nanos()
-//         .filter_level(log_level)
-//         .init();
-//
-//     let mut options = vec![MountOption::FSName("fuser".to_string())];
-//
-//     #[cfg(feature = "abi-7-26")]
-//     {
-//         if matches.is_present("suid") {
-//             info!("setuid bit support enabled");
-//             options.push(MountOption::Suid);
-//         } else {
-//             options.push(MountOption::AutoUnmount);
-//         }
-//     }
-//     #[cfg(not(feature = "abi-7-26"))]
-//     {
-//         options.push(MountOption::AutoUnmount);
-//     }
-//     if let Ok(enabled) = fuse_allow_other_enabled() {
-//         if enabled {
-//             options.push(MountOption::AllowOther);
-//         }
-//     } else {
-//         eprintln!("Unable to read /etc/fuse.conf");
-//     }
-//
-//     let data_dir: String = matches.value_of("data-dir").unwrap_or_default().to_string();
-//
-//     let mountpoint: String = matches
-//         .value_of("mount-point")
-//         .unwrap_or_default()
-//         .to_string();
-//
-//     let result = fuser::mount2(
-//         TracerFS::new(
-//             data_dir,
-//             matches.is_present("direct-io"),
-//             matches.is_present("suid"),
-//         ),
-//         mountpoint,
-//         &options,
-//     );
-//     if let Err(e) = result {
-//         // Return a special error code for permission denied, which usually indicates that
-//         // "user_allow_other" is missing from /etc/fuse.conf
-//         if e.kind() == ErrorKind::PermissionDenied {
-//             error!("{}", e.to_string());
-//             std::process::exit(2);
-//         }
-//     }
-// }
+fn create_new(path: &str) -> io::Result<File> {
+    if !Path::new(&path).exists() {
+        return File::create(path);
+    }
+
+    return File::open(path);
+}
+
+fn get_logger_format() -> impl Fn(&mut Formatter, &Record) -> io::Result<()> {
+    return |buf: &mut Formatter, record: &Record| {
+        writeln!(
+            buf,
+            "{}:{} [{}] - {}",
+            record
+                .file()
+                .map_or("unknown", |f| f.split("/").last().unwrap_or("unknown")),
+            record.line().unwrap_or(0),
+            record.level(),
+            record.args()
+        )
+    };
+}
 
 fn main() {
     let matches = Command::new("Cairn")
@@ -1064,19 +985,11 @@ fn main() {
         // .arg(Arg::new("v").short('v').help("Sets the level of verbosity"))
         .get_matches();
 
-    // let verbosity = matches.get_one::<u64>("v").unwrap();
-    // let verbosity
-    // let log_level = match verbosity {
-    //     0 => LevelFilter::Error,
-    //     1 => LevelFilter::Warn,
-    //     2 => LevelFilter::Info,
-    //     3 => LevelFilter::Debug,
-    //     _ => LevelFilter::Trace,
-    // };
-
-    env_logger::builder()
-        .format_timestamp_nanos()
-        .filter_level(LevelFilter::Trace)
+    let target = Box::new(create_new("tracer.log").unwrap());
+    Builder::new()
+        .format(get_logger_format())
+        .target(env_logger::Target::Pipe(target))
+        .filter_level(LevelFilter::Info)
         .init();
 
     let root = matches.get_one::<String>("root").unwrap().to_string();
@@ -1104,12 +1017,10 @@ fn main() {
 // todo make sure that all the tests can be run in parallel
 #[cfg(test)]
 mod tests {
-    use super::TracerFS;
-    use env_logger::Builder;
+    use super::{create_new, TracerFS};
     use fuser::{MountOption, Session};
-    use std::fs::{File, OpenOptions};
+    use std::fs::OpenOptions;
     use std::io::Write;
-    use std::path::Path;
     use std::process::Command;
     use std::sync::Once;
     use std::{fs, panic, thread};
@@ -1194,32 +1105,12 @@ mod tests {
         }
 
         INIT.call_once(|| {
-            let target = Box::new(
-                if !Path::new(&path).exists() {
-                    File::create(path)
-                } else {
-                    File::open(path)
-                }
-                .expect("Could not create log file"),
-            );
-
-            let _ = Builder::new()
-                .format(|buf, record| {
-                    writeln!(
-                        buf,
-                        "{}:{} [{}] - {}",
-                        record
-                            .file()
-                            .map_or("unknown", |f| f.split("/").last().unwrap_or("unknown")),
-                        record.line().unwrap_or(0),
-                        record.level(),
-                        record.args()
-                    )
-                })
-                .is_test(true)
+            let target = Box::new(create_new(&path).unwrap());
+            env_logger::Builder::new()
+                .format(super::get_logger_format())
                 .target(env_logger::Target::Pipe(target))
                 .filter_level(log::LevelFilter::Trace)
-                //.filter_level(log::LevelFilter::Info)
+                .is_test(true)
                 .init();
         })
     }
