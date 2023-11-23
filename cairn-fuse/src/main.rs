@@ -9,10 +9,11 @@ use fuser::{
 };
 use log::{info, LevelFilter};
 use log::{warn, Record};
+use std::cmp::min;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::fs::{File, Metadata, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
 use std::num::Wrapping;
 use std::os::fd::AsRawFd;
 use std::os::raw::c_int;
@@ -21,6 +22,7 @@ use std::os::unix::fs as ufs;
 use std::os::unix::fs::FileExt;
 use std::os::unix::prelude::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Sender;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io};
 use walkdir::WalkDir;
@@ -156,14 +158,17 @@ impl From<InodeAttributes> for fuser::FileAttr {
 struct TracerFS {
     root: String,
     attrs: BTreeMap<u64, InodeAttributes>,
+    // notify main when filesystem is destroyed
+    sender: Sender<()>,
 }
 
 impl TracerFS {
-    fn new(root: String) -> TracerFS {
+    fn new(root: String, sender: Sender<()>) -> TracerFS {
         {
             TracerFS {
                 root,
                 attrs: BTreeMap::new(),
+                sender,
             }
         }
     }
@@ -276,6 +281,11 @@ impl Filesystem for TracerFS {
         Ok(())
     }
 
+    fn destroy(&mut self) {
+        info!("destroy()");
+        self.sender.send(()).unwrap();
+    }
+
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         info!("lookup(parent={}, name={:?})", parent, name);
 
@@ -341,10 +351,22 @@ impl Filesystem for TracerFS {
             }
 
             // change file modified time
-            utime::set_file_times(&attrs.real_path, attrs.atime.0, time_now().0).unwrap();
+            match utime::set_file_times(&attrs.real_path, attrs.atime.0, time_now().0) {
+                Ok(x) => x,
+                Err(_) => {
+                    reply.error(libc::EIO);
+                    return;
+                }
+            };
 
             // load new metadata
-            let metadata = fs::metadata(&attrs.real_path).unwrap();
+            let metadata = match fs::metadata(&attrs.real_path) {
+                Ok(x) => x,
+                Err(_) => {
+                    reply.error(libc::EIO);
+                    return;
+                }
+            };
 
             // set the mode on the new metadata
             metadata.permissions().set_mode(mode);
@@ -454,7 +476,13 @@ impl Filesystem for TracerFS {
             Some(attrs) => {
                 if attrs.kind == FileKind::Symlink {
                     let path = Path::new(&attrs.real_path);
-                    let link = fs::read_link(path).unwrap();
+                    let link = match fs::read_link(path) {
+                        Ok(x) => x,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
                     reply.data(link.as_os_str().as_bytes());
                 } else {
                     reply.error(libc::EINVAL);
@@ -629,11 +657,17 @@ impl Filesystem for TracerFS {
         match self.attrs.get(&ino) {
             Some(attrs) => {
                 if attrs.kind == FileKind::File {
-                    let file = OpenOptions::new()
+                    let file = match OpenOptions::new()
                         .read(read)
                         .write(write)
                         .open(&attrs.real_path)
-                        .unwrap();
+                    {
+                        Ok(x) => x,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
 
                     let file_handle = file.as_raw_fd() as u64;
                     reply.opened(file_handle, 0);
@@ -665,11 +699,23 @@ impl Filesystem for TracerFS {
         match self.attrs.get(&ino) {
             Some(attrs) => {
                 if attrs.kind == FileKind::File {
-                    if let Ok(file) = File::open(&attrs.real_path) {
-                        let mut buffer = vec![0; size as usize];
+                    let read = |file: File| -> io::Result<Vec<u8>> {
+                        let file_size = file.metadata()?.len();
+                        let read_size = min(size, file_size.saturating_sub(offset as u64) as u32);
+                        let mut buffer = vec![0; read_size as usize];
+                        file.read_exact_at(&mut buffer, offset as u64)?;
+                        Ok(buffer)
+                    };
 
-                        file.read_exact_at(&mut buffer, offset as u64).unwrap();
-                        reply.data(&buffer);
+                    if let Ok(file) = File::open(&attrs.real_path) {
+                        match read(file) {
+                            Ok(buffer) => {
+                                reply.data(&buffer);
+                            }
+                            Err(e) => {
+                                reply.error(e.raw_os_error().unwrap_or(libc::EIO));
+                            }
+                        }
                     } else {
                         reply.error(libc::ENOENT)
                     }
@@ -702,16 +748,31 @@ impl Filesystem for TracerFS {
             offset,
             data.len()
         );
-        let attrs = self.attrs.get(&ino).unwrap();
-        if let Ok(file) = OpenOptions::new().write(true).open(&attrs.real_path) {
-            file.write_all_at(data, offset as u64).unwrap();
+        let attrs = match self.attrs.get(&ino) {
+            Some(x) => x,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
 
-            let metadata = file.metadata().unwrap();
-            self.attrs
-                .insert(ino, (metadata, attrs.real_path.clone()).into());
-            reply.written(data.len() as u32);
-        } else {
-            reply.error(libc::ENOENT);
+        let write = || -> io::Result<Metadata> {
+            let mut file = OpenOptions::new().write(true).open(&attrs.real_path)?;
+            file.seek(SeekFrom::Start(offset as u64))?;
+            file.write_all(data)?;
+            let metadata = file.metadata()?;
+            Ok(metadata)
+        };
+
+        match write() {
+            Ok(metadata) => {
+                self.attrs
+                    .insert(ino, (metadata, attrs.real_path.clone()).into());
+                reply.written(data.len() as u32);
+            }
+            Err(e) => {
+                reply.error(e.raw_os_error().unwrap_or(libc::EIO));
+            }
         }
     }
 
@@ -757,11 +818,17 @@ impl Filesystem for TracerFS {
         match self.attrs.get(&ino) {
             Some(attrs) => {
                 if attrs.kind == FileKind::Directory {
-                    let file = OpenOptions::new()
+                    let file = match OpenOptions::new()
                         .write(write)
                         .read(read)
                         .open(&attrs.real_path)
-                        .unwrap();
+                    {
+                        Ok(x) => x,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
 
                     let file_handle = file.as_raw_fd() as u64;
                     reply.opened(file_handle, 0);
@@ -787,9 +854,27 @@ impl Filesystem for TracerFS {
         if let Some(attrs) = self.attrs.get(&ino) {
             if attrs.kind == FileKind::Directory {
                 let mut entries = Vec::new();
-                for entry in fs::read_dir(&attrs.real_path).unwrap() {
-                    let entry = entry.unwrap();
-                    let metadata = entry.metadata().unwrap();
+                for entry in match fs::read_dir(&attrs.real_path) {
+                    Ok(x) => x,
+                    Err(_) => {
+                        reply.error(libc::EIO);
+                        return;
+                    }
+                } {
+                    let entry = match entry {
+                        Ok(x) => x,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
+                    let metadata = match entry.metadata() {
+                        Ok(x) => x,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
                     let kind = as_file_kind(metadata.mode());
                     let file_name = entry.file_name();
                     let inode = metadata.ino();
@@ -825,9 +910,21 @@ impl Filesystem for TracerFS {
         info!("statfs(ino={})", ino);
 
         let mut statfs: libc::statvfs = unsafe { std::mem::zeroed() };
-        let attrs = self.attrs.get(&ino).unwrap();
+        let attrs = match self.attrs.get(&ino) {
+            Some(x) => x,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
         let path = Path::new(&attrs.real_path);
-        let fd = path.as_os_str().to_str().unwrap();
+        let fd = match path.as_os_str().to_str() {
+            Some(x) => x,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
 
         unsafe {
             libc::statvfs(fd.as_ptr() as *const i8, &mut statfs);
@@ -985,21 +1082,24 @@ fn main() {
         // .arg(Arg::new("v").short('v').help("Sets the level of verbosity"))
         .get_matches();
 
-    let target = Box::new(create_new("tracer.log").unwrap());
+    let root = matches.get_one::<String>("root").unwrap().to_string();
+    let mountpoint = matches.get_one::<String>("mount-point").unwrap();
+    let target = Box::new(create_new(format!("{root}/tracer.log").as_str()).unwrap());
+
     Builder::new()
         .format(get_logger_format())
         .target(env_logger::Target::Pipe(target))
-        .filter_level(LevelFilter::Info)
+        .filter_level(LevelFilter::Trace)
         .init();
-
-    let root = matches.get_one::<String>("root").unwrap().to_string();
-    let mountpoint = matches.get_one::<String>("mount-point").unwrap();
 
     // unmount filesystem automatically when SIGINT is received
     let (send, recv) = std::sync::mpsc::channel();
+    let send_ctrlc = send.clone();
+    let send_finished = send.clone();
+
     ctrlc::set_handler(move || {
         info!("Received SIGINT, unmounting filesystem");
-        send.send(()).unwrap();
+        send_ctrlc.send(()).unwrap();
     })
     .unwrap();
 
@@ -1007,10 +1107,14 @@ fn main() {
         MountOption::AllowOther,
         MountOption::FSName("cairn-fuse".to_string()),
     ];
-    let guard =
-        fuser::spawn_mount2(TracerFS::new(root), mountpoint, mount_options.as_slice()).unwrap();
+    let guard = fuser::spawn_mount2(
+        TracerFS::new(root, send_finished),
+        mountpoint,
+        mount_options.as_slice(),
+    )
+    .unwrap();
 
-    recv.recv().unwrap();
+    let () = recv.recv().unwrap();
     drop(guard);
 }
 
@@ -1035,13 +1139,14 @@ mod tests {
     {
         setup(get_current_log_path(target));
 
+        let (send, _) = std::sync::mpsc::channel();
         let mount_options = [
             MountOption::AllowOther,
             MountOption::AutoUnmount,
             MountOption::FSName("cairn-fuse-test".to_string()),
         ];
         let mut session = Session::new(
-            TracerFS::new(DIRS[0].to_string()),
+            TracerFS::new(DIRS[0].to_string(), send.clone()),
             DIRS[1].as_ref(),
             &mount_options,
         )
