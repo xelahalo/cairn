@@ -28,8 +28,11 @@ jobs:
     - name: Start the docker container
       run: bash init.sh ./host_mnt
 
-    - name: Run stage 1 benchmarks
-      run: bash benchmarks/run.sh stage_1
+#    - name: Run stage 1 benchmarks
+#      run: bash benchmarks/run.sh stage_1
+
+    - name: Run stage 2 benchmarks
+      run: bash benchmarks/run.sh stage_2
 
     - name: Publish benchmark results
       if: success()

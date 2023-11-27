@@ -24,7 +24,7 @@ use std::os::unix::prelude::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{env, fs, io, thread};
+use std::{env, fs, io};
 use walkdir::WalkDir;
 
 const FMODE_EXEC: i32 = 0x20;
@@ -158,17 +158,15 @@ impl From<InodeAttributes> for fuser::FileAttr {
 struct TracerFS {
     root: String,
     attrs: BTreeMap<u64, InodeAttributes>,
-    init: Sender<()>,
     destroy: Sender<()>,
 }
 
 impl TracerFS {
-    fn new(root: String, init: Sender<()>, destroy: Sender<()>) -> TracerFS {
+    fn new(root: String, destroy: Sender<()>) -> TracerFS {
         {
             TracerFS {
                 root,
                 attrs: BTreeMap::new(),
-                init,
                 destroy,
             }
         }
@@ -280,7 +278,8 @@ impl Filesystem for TracerFS {
             self.attrs.insert(inode, attrs);
         }
 
-        self.init.send(()).unwrap();
+        File::create(".cairn-fuse-ready").expect("Failed to create .cairn-fuse-ready");
+
         Ok(())
     }
 
@@ -1068,7 +1067,7 @@ fn main() {
 
     let root = matches.get_one::<String>("root").unwrap().to_string();
     let mountpoint = matches.get_one::<String>("mount-point").unwrap();
-    let target = Box::new(create_new(format!("tracer.log").as_str()).unwrap());
+    let target = Box::new(create_new(format!("{root}/tracer.log").as_str()).unwrap());
 
     Builder::new()
         .format(get_logger_format())
@@ -1080,14 +1079,6 @@ fn main() {
     let (drop_send, drop_recv) = std::sync::mpsc::channel();
     let ctrlc = drop_send.clone();
     let destroy = drop_send.clone();
-
-    // ready fs after init run
-    let (init_send, init_recv) = std::sync::mpsc::channel();
-    let init_file_path = format!("{root}/.cairn-fuse-ready");
-    thread::spawn(move || {
-        let () = init_recv.recv().unwrap();
-        let _ = File::create(init_file_path);
-    });
 
     // handle graceful shutdown on ctrl-c
     ctrlc::set_handler(move || {
@@ -1101,14 +1092,14 @@ fn main() {
         MountOption::FSName("cairn-fuse".to_string()),
     ];
     let guard = fuser::spawn_mount2(
-        TracerFS::new(root.clone(), init_send, destroy),
+        TracerFS::new(root.clone(), destroy),
         mountpoint,
         mount_options.as_slice(),
     )
     .unwrap();
 
     let () = drop_recv.recv().unwrap();
-    let _ = fs::remove_file(format!("{root}/.cairn-fuse-ready"));
+    let _ = fs::remove_file(".cairn-fuse-ready");
     drop(guard);
 }
 
@@ -1140,7 +1131,7 @@ mod tests {
             MountOption::FSName("cairn-fuse-test".to_string()),
         ];
         let mut session = Session::new(
-            TracerFS::new(DIRS[0].to_string(), send.clone(), send.clone()),
+            TracerFS::new(DIRS[0].to_string(), send.clone()),
             DIRS[1].as_ref(),
             &mount_options,
         )

@@ -36,10 +36,10 @@ if ! docker info >/dev/null 2>&1; then
 	exit 1
 fi
 
+#	--detach \
 docker build -t "build-env:test" .
 docker run \
 	--rm \
-	--detach \
 	--privileged \
 	--mount type=bind,source="$(pwd)/$mountpoint",target=/usr/src/dockermount,bind-propagation=rshared \
 	--cap-add SYS_ADMIN \
