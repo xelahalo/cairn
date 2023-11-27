@@ -26,7 +26,7 @@ jobs:
       run: cargo install --path .
 
     - name: Start the docker container
-      run: bash init.sh /mnt
+      run: bash init.sh ./host_mnt
 
     - name: Run stage 1 benchmarks
       run: bash benchmarks/run.sh stage_1

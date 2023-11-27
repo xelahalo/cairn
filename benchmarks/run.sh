@@ -18,9 +18,9 @@ for d in benchmarks/$STAGE/*; do
 		# if it is a directory 
 		if [ -d "$f" ] ; then
 			# copy the benchmark test to the workdir
-			rsync -av $f/ mnt/workdir/
-			cp $d/$EXECUTABLE mnt/workdir/
-			cd mnt/workdir/
+			rsync -av $f/ host_mnt/workdir/
+			cp $d/$EXECUTABLE host_mnt/workdir/
+			cd host_mnt/workdir/
 
 			# STEP 1: Benchmark it locally
 			chmod +x run.sh && hyperfine --warmup 3 './run.sh' --export-json local_$BENCHMARK_NAME.json
@@ -40,10 +40,10 @@ for d in benchmarks/$STAGE/*; do
 			# move the json to the benchmark directory
 			mkdir -p benchmarks/results/$EXECUTABLE/$(basename $f)
 			# copy over all the files that were used to make the benchmarks
-			rsync -av --exclude ".gitkeep" mnt/workdir/ benchmarks/results/$EXECUTABLE/$(basename $f)/
+			rsync -av --exclude ".gitkeep" host_mnt/workdir/ benchmarks/results/$EXECUTABLE/$(basename $f)/
 
 			# clean up workdir
-			find mnt/workdir \( -type d -o -type f \) ! -name ".gitkeep" -mindepth 1 -exec rm -r {} \;
+			find host_mnt/workdir \( -type d -o -type f \) ! -name ".gitkeep" -mindepth 1 -exec rm -r {} \;
 		fi
 	done
 done

@@ -2,7 +2,7 @@
 
 docker container kill build-env
 
-cd mnt
+cd host_mnt
 ./clean.sh
 cd ..
 

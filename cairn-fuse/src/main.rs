@@ -24,7 +24,7 @@ use std::os::unix::prelude::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{env, fs, io};
+use std::{env, fs, io, thread};
 use walkdir::WalkDir;
 
 const FMODE_EXEC: i32 = 0x20;
@@ -158,17 +158,18 @@ impl From<InodeAttributes> for fuser::FileAttr {
 struct TracerFS {
     root: String,
     attrs: BTreeMap<u64, InodeAttributes>,
-    // notify main when filesystem is destroyed
-    sender: Sender<()>,
+    init: Sender<()>,
+    destroy: Sender<()>,
 }
 
 impl TracerFS {
-    fn new(root: String, sender: Sender<()>) -> TracerFS {
+    fn new(root: String, init: Sender<()>, destroy: Sender<()>) -> TracerFS {
         {
             TracerFS {
                 root,
                 attrs: BTreeMap::new(),
-                sender,
+                init,
+                destroy,
             }
         }
     }
@@ -191,6 +192,7 @@ impl TracerFS {
             Err(e) => Err(e.raw_os_error().unwrap_or(libc::EIO)),
         }
     }
+
     fn handle_metadata_on_removal<T>(
         &mut self,
         metadata: io::Result<fs::Metadata>,
@@ -278,12 +280,13 @@ impl Filesystem for TracerFS {
             self.attrs.insert(inode, attrs);
         }
 
+        self.init.send(()).unwrap();
         Ok(())
     }
 
     fn destroy(&mut self) {
         info!("destroy()");
-        self.sender.send(()).unwrap();
+        self.destroy.send(()).unwrap();
     }
 
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
@@ -291,6 +294,7 @@ impl Filesystem for TracerFS {
 
         match self.lookup_name(parent, name) {
             Ok(attrs) => {
+                self.attrs.insert(attrs.ino, attrs.clone());
                 reply.entry(&Duration::new(0, 0), &attrs.into(), 0);
             }
             Err(e) => {
@@ -334,7 +338,6 @@ impl Filesystem for TracerFS {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        // get attrs and handle it properly
         let attrs = match self.attrs.get(&ino) {
             Some(attrs) => attrs,
             None => {
@@ -350,31 +353,12 @@ impl Filesystem for TracerFS {
                 return;
             }
 
-            // change file modified time
-            match utime::set_file_times(&attrs.real_path, attrs.atime.0, time_now().0) {
-                Ok(x) => x,
-                Err(_) => {
-                    reply.error(libc::EIO);
-                    return;
-                }
-            };
+            self.handle_metadata_on_change(
+                &PathBuf::from(&attrs.real_path),
+                fs::set_permissions(&attrs.real_path, PermissionsExt::from_mode(mode)),
+                Reply::Attr(reply),
+            );
 
-            // load new metadata
-            let metadata = match fs::metadata(&attrs.real_path) {
-                Ok(x) => x,
-                Err(_) => {
-                    reply.error(libc::EIO);
-                    return;
-                }
-            };
-
-            // set the mode on the new metadata
-            metadata.permissions().set_mode(mode);
-
-            // save
-            let new_attrs: InodeAttributes = (metadata, attrs.real_path.clone()).into();
-            self.attrs.insert(ino, new_attrs.clone());
-            reply.attr(&Duration::new(0, 0), &new_attrs.into());
             return;
         }
 
@@ -397,19 +381,19 @@ impl Filesystem for TracerFS {
             let file = match OpenOptions::new().write(true).open(&attrs.real_path) {
                 Ok(file) => file,
                 Err(err) => match err.kind() {
-                    std::io::ErrorKind::NotFound => {
+                    io::ErrorKind::NotFound => {
                         reply.error(libc::ENOENT);
                         return;
                     }
-                    std::io::ErrorKind::PermissionDenied => {
+                    io::ErrorKind::PermissionDenied => {
                         reply.error(libc::EACCES);
                         return;
                     }
-                    std::io::ErrorKind::AlreadyExists => {
+                    io::ErrorKind::AlreadyExists => {
                         reply.error(libc::EEXIST);
                         return;
                     }
-                    std::io::ErrorKind::InvalidInput => {
+                    io::ErrorKind::InvalidInput => {
                         reply.error(libc::EINVAL);
                         return;
                     }
@@ -1084,7 +1068,7 @@ fn main() {
 
     let root = matches.get_one::<String>("root").unwrap().to_string();
     let mountpoint = matches.get_one::<String>("mount-point").unwrap();
-    let target = Box::new(create_new(format!("{root}/tracer.log").as_str()).unwrap());
+    let target = Box::new(create_new(format!("tracer.log").as_str()).unwrap());
 
     Builder::new()
         .format(get_logger_format())
@@ -1093,13 +1077,22 @@ fn main() {
         .init();
 
     // unmount filesystem automatically when SIGINT is received
-    let (send, recv) = std::sync::mpsc::channel();
-    let send_ctrlc = send.clone();
-    let send_finished = send.clone();
+    let (drop_send, drop_recv) = std::sync::mpsc::channel();
+    let ctrlc = drop_send.clone();
+    let destroy = drop_send.clone();
 
+    // ready fs after init run
+    let (init_send, init_recv) = std::sync::mpsc::channel();
+    let init_file_path = format!("{root}/.cairn-fuse-ready");
+    thread::spawn(move || {
+        let () = init_recv.recv().unwrap();
+        let _ = File::create(init_file_path);
+    });
+
+    // handle graceful shutdown on ctrl-c
     ctrlc::set_handler(move || {
         info!("Received SIGINT, unmounting filesystem");
-        send_ctrlc.send(()).unwrap();
+        ctrlc.send(()).unwrap();
     })
     .unwrap();
 
@@ -1108,13 +1101,14 @@ fn main() {
         MountOption::FSName("cairn-fuse".to_string()),
     ];
     let guard = fuser::spawn_mount2(
-        TracerFS::new(root, send_finished),
+        TracerFS::new(root.clone(), init_send, destroy),
         mountpoint,
         mount_options.as_slice(),
     )
     .unwrap();
 
-    let () = recv.recv().unwrap();
+    let () = drop_recv.recv().unwrap();
+    let _ = fs::remove_file(format!("{root}/.cairn-fuse-ready"));
     drop(guard);
 }
 
@@ -1146,7 +1140,7 @@ mod tests {
             MountOption::FSName("cairn-fuse-test".to_string()),
         ];
         let mut session = Session::new(
-            TracerFS::new(DIRS[0].to_string(), send.clone()),
+            TracerFS::new(DIRS[0].to_string(), send.clone(), send.clone()),
             DIRS[1].as_ref(),
             &mount_options,
         )

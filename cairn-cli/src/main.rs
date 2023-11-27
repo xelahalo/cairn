@@ -7,7 +7,7 @@ use crate::app::App;
 use clap::{crate_version, Arg, Command};
 use error::AppError;
 
-const MNT_DIR: &str = "/mnt";
+const MNT_DIR: &str = "/host_mnt";
 const CHROOT_DIR: &str = "/usr/src/fusemount";
 const WORK_DIR: &str = "workdir";
 const CONTAINER_NAME: &str = "build-env";
