@@ -1,4 +1,4 @@
 #!/bin/bash 
 
-rm -rf bin dev etc lib* proc sys usr
+rm -rf bin dev etc lib* proc sys usr workdir
 rm tracer.log
