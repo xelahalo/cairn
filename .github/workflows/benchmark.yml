@@ -28,6 +28,9 @@ jobs:
     - name: Start the docker container
       run: bash init.sh ./host_mnt
 
+    - name: Install pip dependencies in venv
+      run: python3 -m venv venv && source venv/bin/activate && pip install -r benchmarks/requirements.txt
+
     - name: Run the benchmarks
       run: bash benchmarks/run.sh
 

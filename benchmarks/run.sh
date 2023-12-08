@@ -65,7 +65,8 @@ for d in benchmarks/commands/*; do
 done
 
 # run plot.py on the results
-python3 benchmarks/plot.py benchmarks/results/stress
+source venv/bin/activate && python3 benchmarks/plot.py benchmarks/results/stress
+deactivate
 
 # # zip the results
 cd benchmarks/results
@@ -73,3 +74,4 @@ zip -r $BENCHMARK_NAME.zip *
 cd ../..
 mv benchmarks/results/$BENCHMARK_NAME.zip benchmarks/
 rm -rf benchmarks/results/
+
