@@ -64,6 +64,9 @@ for d in benchmarks/commands/*; do
 	done
 done
 
+# run plot.py on the results
+python3 benchmarks/plot.py benchmarks/results/stress
+
 # # zip the results
 cd benchmarks/results
 zip -r $BENCHMARK_NAME.zip *
