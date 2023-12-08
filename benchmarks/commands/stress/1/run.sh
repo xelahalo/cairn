@@ -8,7 +8,7 @@ fi
 n="$1"
 
 for ((i = 1; i <= n; i++)); do
-    gcc donut.c
+    gcc donut.c -lm
 done
 
 echo "Done running command: gcc donut.c (iterations: $n)"

@@ -1,1 +1,1 @@
-gcc donut.c
+gcc donut.c -lm
