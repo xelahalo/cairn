@@ -11,6 +11,10 @@ for d in benchmarks/commands/*; do
 	for f in $d/*; do
 		# if it is a directory 
 		if [ -d "$f" ] ; then
+      echo "-----------------------------------------"
+      echo "Benchmarking $f"
+      echo "-----------------------------------------"
+
 			# copy the benchmark test to the workdir
 			rsync -av $f/ host_mnt/workdir/
 
@@ -24,29 +28,47 @@ for d in benchmarks/commands/*; do
 			chmod +x run.sh
 
 			# STEP 1: Benchmark it locally
-			if [ "$EXECUTABLE" = "stress" ]; then
-        hyperfine --warmup 3 --parameter-scan iter 1 101 -D 10 './run.sh {iter}' --export-json local_$BENCHMARK_NAME.json
-      else
-      	hyperfine --warmup 3 './run.sh' --export-json local_$BENCHMARK_NAME.json
-      fi
+			# if [ "$EXECUTABLE" = "stress" ]; then
+   #      hyperfine --warmup 3 --parameter-scan iter 1 11 -D 2 './run.sh {iter}' --export-json local_$BENCHMARK_NAME.json
+   #    else
+   #    	hyperfine --warmup 3 './run.sh' --export-json local_$BENCHMARK_NAME.json
+   #    fi 
 
-			# STEP 2: Benchmark it in docker: from the inside
-			docker exec build-env mkdir -p /usr/src/benchmark/ 
-			docker exec build-env rsync -av /usr/src/dockermount/workdir/ /usr/src/benchmark/
-			if [ "$EXECUTABLE" = "stress" ]; then
-        docker exec build-env /bin/bash -c "cd /usr/src/benchmark && chmod +x run.sh && hyperfine --warmup 3 --parameter-scan iter 1 101 -D 10 './run.sh {iter}' --export-json docker_$BENCHMARK_NAME.json"
-      else
-      	docker exec build-env /bin/bash -c "cd /usr/src/benchmark && chmod +x run.sh && hyperfine --warmup 3 './run.sh' --export-json docker_$BENCHMARK_NAME.json"
-      fi
-			docker exec build-env cp /usr/src/benchmark/docker_$BENCHMARK_NAME.json /usr/src/dockermount/workdir/
-      docker exec build-env find /usr/src/benchmark -delete
 
-      # STEP 3: Benchmark it in docker: from the outside
-      # TODO
+			# STEP 2: Benchmark it in docker
+      # docker exec build-env mkdir -p /usr/src/benchmark/
+      # docker exec build-env rsync -av /usr/src/dockermount/workdir/ /usr/src/benchmark/
+      # 
+      # docker exec build-env /bin/bash -c "cd /usr/src/benchmark && chmod +x run.sh && \
+      # if [ \"$EXECUTABLE\" = \"stress\" ]; then \
+      #   hyperfine --warmup 3 --parameter-scan iter 1 101 -D 10 './run.sh {iter}' --export-json docker_$BENCHMARK_NAME.json; \
+      # else \
+      #   hyperfine --warmup 3 './run.sh' --export-json docker_$BENCHMARK_NAME.json; \
+      # fi"
+      #
+      # docker exec build-env cp /usr/src/benchmark/docker_$BENCHMARK_NAME.json /usr/src/dockermount/workdir/
+      # docker exec build-env find /usr/src/benchmark -delete
+
+      # STEP 3: Benchmark it in docker on top of FUSE
+      docker exec build-env mkdir -p /usr/src/fuse_benchmark/ 
+      docker exec build-env /bin/bash -c "gcc -Wall libfuse_examples/passthrough_ll.c \`pkg-config fuse3 --cflags --libs\` -o passthrough_ll"
+      docker exec build-env ./passthrough_ll /usr/src/fuse_benchmark 
+      docker exec build-env mkdir -p /usr/src/fuse_benchmark/workdir 
+      docker exec build-env /bin/bash -c "rsync -av /usr/src/dockermount/workdir/ /usr/src/fuse_benchmark/workdir/"
+      docker exec build-env /bin/bash -c "cd /usr/src/fuse_benchmark/workdir && chmod +x run.sh && \
+        if [ \"$EXECUTABLE\" = \"stress\" ]; then \
+          hyperfine --warmup 3 --parameter-scan iter 1 11 -D 2 './run.sh {iter}' --export-json fuse_docker_$BENCHMARK_NAME.json; \
+        else \
+          hyperfine --warmup 3 './run.sh' --export-json fuse_docker_$BENCHMARK_NAME.json; \
+        fi"
+      docker exec build-env cp /usr/src/fuse_benchmark/workdir/fuse_docker_$BENCHMARK_NAME.json /usr/src/dockermount/workdir/ 
+      docker exec build-env find /usr/src/fuse_benchmark/workdir -delete 
+      docker exec build-env umount /usr/src/fuse_benchmark
+
 
 			# STEP 4: Benchmark it using Cairn
 			if [ "$EXECUTABLE" = "stress" ]; then
-        hyperfine --warmup 3 --parameter-scan iter 1 101 -D 10 'cairn "./run.sh {iter}" --container build-env' --export-json cairn_$BENCHMARK_NAME.json
+        hyperfine --warmup 3 --parameter-scan iter 1 11 -D 2 'cairn "./run.sh {iter}" --container build-env' --export-json cairn_$BENCHMARK_NAME.json
       else
       	hyperfine --warmup 3 'cairn "./run.sh" --container build-env' --export-json cairn_$BENCHMARK_NAME.json
       fi
@@ -56,7 +78,7 @@ for d in benchmarks/commands/*; do
 			# move the json to the benchmark directory
 			mkdir -p benchmarks/results/$EXECUTABLE/$(basename $f)
 			# copy over all the files that were used to make the benchmarks
-			rsync -av --exclude ".gitkeep" host_mnt/workdir/ benchmarks/results/$EXECUTABLE/$(basename $f)/
+			rsync -avhr --exclude ".gitkeep" host_mnt/workdir/* benchmarks/results/$EXECUTABLE/$(basename $f)
 
 			# clean up workdir
 			find host_mnt/workdir \( -type d -o -type f \) ! -name ".gitkeep" -mindepth 1 -exec rm -r {} \;
@@ -64,8 +86,10 @@ for d in benchmarks/commands/*; do
 	done
 done
 
-# run plot.py on the results
-source venv/bin/activate && python3 benchmarks/plot.py benchmarks/results/stress
+# run python scripts
+source venv/bin/activate
+python3 benchmarks/tex.py benchmarks/results/
+python3 benchmarks/plot.py benchmarks/results/stress
 deactivate
 
 # # zip the results
