@@ -12,7 +12,7 @@ jobs:
     steps:
     - name: Tear down the previous docker container
       id: docker-status
-      run: bash teardown.sh
+      run: bash teardown.sh || true
 
     - name: Check out code
       uses: actions/checkout@v2
@@ -25,8 +25,8 @@ jobs:
     - name: Build and install the cli tool
       run: cargo install --path ./cairn-cli
 
-    - name: Start the docker container
-      run: bash init.sh ./host_mnt
+    - name: Start the docker containers
+      run: bash init.sh -b ./host_mnt
 
     - name: Install pip dependencies in venv
       run: python3 -m venv venv && source venv/bin/activate && pip install -r benchmarks/requirements.txt

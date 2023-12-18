@@ -3,13 +3,17 @@
 usage() {
 	echo "Usage: $0 [-h] <mountpoint>" 1>&2
 	echo "  -h: Display this help message" 1>&2
+  echo "  -b: Also build and run the benchmarking container" 1>&2
 	exit 1
 }
 
-while getopts ":h" opt; do
+while getopts ":hb" opt; do
 	case ${opt} in
 	h)
 		usage
+		;;
+  b)
+		BENCHMARK=true
 		;;
 	\?)
 		echo "Invalid option: -$OPTARG" 1>&2
@@ -36,6 +40,19 @@ if ! docker info >/dev/null 2>&1; then
 	exit 1
 fi
 
+if [ "$BENCHMARK" = true ]; then 
+  echo "Building and running benchmarking container"
+  docker build -t "build-env:bench" -f benchmarks/Dockerfile .
+  docker run \
+    --rm \
+    --detach \
+    --privileged \
+    --mount type=bind,source="$(pwd)/$mountpoint",target=/usr/src/dockermount,bind-propagation=rshared \
+    --cap-add SYS_ADMIN \
+    --name "build-env-bench" \
+    -it "build-env:bench" 
+fi
+
 docker build -t "build-env:test" .
 docker run \
 	--rm \
@@ -45,3 +62,4 @@ docker run \
 	--cap-add SYS_ADMIN \
 	--name "build-env" \
 	-it "build-env:test" 
+
