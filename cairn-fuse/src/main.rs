@@ -1,15 +1,20 @@
-// Based on the simple.rs implementation in the fuser repo
+// Based on https://github.com/cberner/fuser/blob/master/examples/simple.rs
 
 use clap::{crate_version, Arg, Command};
+use env_logger::fmt::Formatter;
+use env_logger::Builder;
 use fuser::{
     Filesystem, KernelConfig, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty,
     ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request, TimeOrNow, FUSE_ROOT_ID,
 };
-use log::{debug, warn};
-use log::{error, LevelFilter};
+use log::{info, LevelFilter};
+use log::{warn, Record};
+use std::cmp::min;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::fs::{File, OpenOptions};
+use std::fs::{File, Metadata, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
+use std::num::Wrapping;
 use std::os::fd::AsRawFd;
 use std::os::raw::c_int;
 use std::os::unix::ffi::OsStrExt;
@@ -17,6 +22,7 @@ use std::os::unix::fs as ufs;
 use std::os::unix::fs::FileExt;
 use std::os::unix::prelude::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Sender;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io};
 use walkdir::WalkDir;
@@ -50,7 +56,6 @@ impl From<FileKind> for fuser::FileType {
         }
     }
 }
-
 
 fn time_now() -> (i64, u32) {
     time_from_system_time(&SystemTime::now())
@@ -153,14 +158,16 @@ impl From<InodeAttributes> for fuser::FileAttr {
 struct TracerFS {
     root: String,
     attrs: BTreeMap<u64, InodeAttributes>,
+    destroy: Sender<()>,
 }
 
 impl TracerFS {
-    fn new(root: String) -> TracerFS {
+    fn new(root: String, destroy: Sender<()>) -> TracerFS {
         {
             TracerFS {
                 root,
                 attrs: BTreeMap::new(),
+                destroy,
             }
         }
     }
@@ -183,6 +190,7 @@ impl TracerFS {
             Err(e) => Err(e.raw_os_error().unwrap_or(libc::EIO)),
         }
     }
+
     fn handle_metadata_on_removal<T>(
         &mut self,
         metadata: io::Result<fs::Metadata>,
@@ -255,7 +263,7 @@ impl TracerFS {
 impl Filesystem for TracerFS {
     fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
         for entry in WalkDir::new(&self.root).into_iter().filter_map(|e| e.ok()) {
-            debug!("init() entry: {:?}", entry);
+            info!("init() entry: {:?}", entry);
             let metadata = entry.metadata().unwrap();
             let real_path = entry.path().to_str().unwrap().to_string();
 
@@ -270,14 +278,22 @@ impl Filesystem for TracerFS {
             self.attrs.insert(inode, attrs);
         }
 
+        File::create(".cairn-fuse-ready").expect("Failed to create .cairn-fuse-ready");
+
         Ok(())
     }
 
+    fn destroy(&mut self) {
+        info!("destroy()");
+        self.destroy.send(()).unwrap();
+    }
+
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        debug!("lookup(parent={}, name={:?})", parent, name);
+        info!("lookup(parent={}, name={:?})", parent, name);
 
         match self.lookup_name(parent, name) {
             Ok(attrs) => {
+                self.attrs.insert(attrs.ino, attrs.clone());
                 reply.entry(&Duration::new(0, 0), &attrs.into(), 0);
             }
             Err(e) => {
@@ -287,11 +303,11 @@ impl Filesystem for TracerFS {
     }
 
     fn forget(&mut self, _req: &Request, _ino: u64, _nlookup: u64) {
-        debug!("forget(ino={}, nlookup={})", _ino, _nlookup);
+        info!("forget(ino={}, nlookup={})", _ino, _nlookup);
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        debug!("getattr(ino={})", ino);
+        info!("getattr(ino={})", ino);
 
         match self.attrs.get(&ino) {
             Some(attrs) => {
@@ -321,7 +337,6 @@ impl Filesystem for TracerFS {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        // get attrs and handle it properly
         let attrs = match self.attrs.get(&ino) {
             Some(attrs) => attrs,
             None => {
@@ -331,30 +346,23 @@ impl Filesystem for TracerFS {
         };
 
         if let Some(mode) = mode {
-            debug!("chmod() called with {:?}, {:o}", ino, mode);
+            info!("chmod() called with {:?}, {:o}", ino, mode);
             if req.uid() != 0 && req.uid() != attrs.uid {
                 reply.error(libc::EPERM);
                 return;
             }
 
-            // change file modified time
-            utime::set_file_times(&attrs.real_path, attrs.atime.0, time_now().0).unwrap();
+            self.handle_metadata_on_change(
+                &PathBuf::from(&attrs.real_path),
+                fs::set_permissions(&attrs.real_path, PermissionsExt::from_mode(mode)),
+                Reply::Attr(reply),
+            );
 
-            // load new metadata
-            let metadata = fs::metadata(&attrs.real_path).unwrap();
-
-            // set the mode on the new metadata
-            metadata.permissions().set_mode(mode);
-
-            // save
-            let new_attrs: InodeAttributes = (metadata, attrs.real_path.clone()).into();
-            self.attrs.insert(ino, new_attrs.clone());
-            reply.attr(&Duration::new(0, 0), &new_attrs.into());
             return;
         }
 
         if uid.is_some() || gid.is_some() {
-            debug!("chown() called with {:?} {:?} {:?}", ino, uid, gid);
+            info!("chown() called with {:?} {:?} {:?}", ino, uid, gid);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -366,25 +374,25 @@ impl Filesystem for TracerFS {
         }
 
         if let Some(size) = size {
-            debug!("truncate() called with {:?} {:?}", ino, size);
+            info!("truncate() called with {:?} {:?}", ino, size);
 
             // open file and truncate it
             let file = match OpenOptions::new().write(true).open(&attrs.real_path) {
                 Ok(file) => file,
                 Err(err) => match err.kind() {
-                    std::io::ErrorKind::NotFound => {
+                    io::ErrorKind::NotFound => {
                         reply.error(libc::ENOENT);
                         return;
                     }
-                    std::io::ErrorKind::PermissionDenied => {
+                    io::ErrorKind::PermissionDenied => {
                         reply.error(libc::EACCES);
                         return;
                     }
-                    std::io::ErrorKind::AlreadyExists => {
+                    io::ErrorKind::AlreadyExists => {
                         reply.error(libc::EEXIST);
                         return;
                     }
-                    std::io::ErrorKind::InvalidInput => {
+                    io::ErrorKind::InvalidInput => {
                         reply.error(libc::EINVAL);
                         return;
                     }
@@ -395,16 +403,18 @@ impl Filesystem for TracerFS {
                 },
             };
 
-            file.set_len(size).unwrap();
-            let metadata = file.metadata().unwrap();
-            self.attrs
-                .insert(ino, (metadata, attrs.real_path.clone()).into());
+            self.handle_metadata_on_change(
+                &PathBuf::from(&attrs.real_path),
+                file.set_len(size),
+                Reply::Attr(reply),
+            );
+
             return;
         }
 
         let now = time_now();
         if let Some(atime) = atime {
-            debug!("utimens() called with {:?} {:?}", ino, atime);
+            info!("utimens() called with {:?} {:?}", ino, atime);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -423,7 +433,7 @@ impl Filesystem for TracerFS {
         }
 
         if let Some(mtime) = mtime {
-            debug!("utimens() called with {:?} {:?}", ino, mtime);
+            info!("utimens() called with {:?} {:?}", ino, mtime);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -443,13 +453,19 @@ impl Filesystem for TracerFS {
     }
 
     fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyData) {
-        debug!("readlink(ino={})", ino);
+        info!("readlink(ino={})", ino);
 
         match self.attrs.get(&ino) {
             Some(attrs) => {
                 if attrs.kind == FileKind::Symlink {
                     let path = Path::new(&attrs.real_path);
-                    let link = fs::read_link(path).unwrap();
+                    let link = match fs::read_link(path) {
+                        Ok(x) => x,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
                     reply.data(link.as_os_str().as_bytes());
                 } else {
                     reply.error(libc::EINVAL);
@@ -471,7 +487,7 @@ impl Filesystem for TracerFS {
         rdev: u32,
         reply: ReplyEntry,
     ) {
-        debug!(
+        info!(
             "mknod(parent={}, name={:?}, mode={}, rdev={})",
             parent, name, mode, rdev
         );
@@ -507,14 +523,14 @@ impl Filesystem for TracerFS {
         _umask: u32,
         reply: ReplyEntry,
     ) {
-        debug!("mkdir(parent={}, name={:?}, mode={})", parent, name, mode);
+        info!("mkdir(parent={}, name={:?}, mode={})", parent, name, mode);
         let path = self.get_path(parent, name);
 
         self.handle_metadata_on_change(&path, fs::create_dir(path.clone()), Reply::Entry(reply));
     }
 
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        debug!("unlink(parent={}, name={:?})", parent, name);
+        info!("unlink(parent={}, name={:?})", parent, name);
         let path = self.get_path(parent, name);
         let metadata = fs::metadata(path.clone());
 
@@ -522,7 +538,7 @@ impl Filesystem for TracerFS {
     }
 
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        debug!("rmdir(parent={}, name={:?})", parent, name);
+        info!("rmdir(parent={}, name={:?})", parent, name);
         let path = self.get_path(parent, name);
         let metadata = fs::metadata(path.clone());
 
@@ -537,7 +553,7 @@ impl Filesystem for TracerFS {
         link: &Path,
         reply: ReplyEntry,
     ) {
-        debug!(
+        info!(
             "symlink(parent={}, name={:?}, link={:?})",
             parent, name, link
         );
@@ -560,7 +576,7 @@ impl Filesystem for TracerFS {
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        debug!(
+        info!(
             "rename(parent={}, name={:?}, newparent={}, newname={:?})",
             parent, name, newparent, newname
         );
@@ -582,7 +598,7 @@ impl Filesystem for TracerFS {
         newname: &OsStr,
         reply: ReplyEntry,
     ) {
-        debug!(
+        info!(
             "link(ino={}, newparent={}, newname={:?})",
             ino, newparent, newname
         );
@@ -597,7 +613,7 @@ impl Filesystem for TracerFS {
     }
 
     fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
-        debug!("open(ino={}, flags={})", ino, flags);
+        info!("open(ino={}, flags={})", ino, flags);
         let (_access_mask, read, write) = match flags & libc::O_ACCMODE {
             libc::O_RDONLY => {
                 // Behavior is undefined, but most filesystems return EACCES
@@ -624,11 +640,17 @@ impl Filesystem for TracerFS {
         match self.attrs.get(&ino) {
             Some(attrs) => {
                 if attrs.kind == FileKind::File {
-                    let file = OpenOptions::new()
+                    let file = match OpenOptions::new()
                         .read(read)
                         .write(write)
                         .open(&attrs.real_path)
-                        .unwrap();
+                    {
+                        Ok(x) => x,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
 
                     let file_handle = file.as_raw_fd() as u64;
                     reply.opened(file_handle, 0);
@@ -653,18 +675,30 @@ impl Filesystem for TracerFS {
         _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
-        debug!(
+        info!(
             "read(ino={}, fh={}, offset={}, size={})",
             ino, fh, offset, size
         );
         match self.attrs.get(&ino) {
             Some(attrs) => {
                 if attrs.kind == FileKind::File {
-                    if let Ok(file) = File::open(&attrs.real_path) {
-                        let mut buffer = vec![0; size as usize];
+                    let read = |file: File| -> io::Result<Vec<u8>> {
+                        let file_size = file.metadata()?.len();
+                        let read_size = min(size, file_size.saturating_sub(offset as u64) as u32);
+                        let mut buffer = vec![0; read_size as usize];
+                        file.read_exact_at(&mut buffer, offset as u64)?;
+                        Ok(buffer)
+                    };
 
-                        file.read_exact_at(&mut buffer, offset as u64).unwrap();
-                        reply.data(&buffer);
+                    if let Ok(file) = File::open(&attrs.real_path) {
+                        match read(file) {
+                            Ok(buffer) => {
+                                reply.data(&buffer);
+                            }
+                            Err(e) => {
+                                reply.error(e.raw_os_error().unwrap_or(libc::EIO));
+                            }
+                        }
                     } else {
                         reply.error(libc::ENOENT)
                     }
@@ -690,23 +724,38 @@ impl Filesystem for TracerFS {
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        debug!(
+        info!(
             "write(ino={}, fh={}, offset={}, size={})",
             ino,
             _fh,
             offset,
             data.len()
         );
-        let attrs = self.attrs.get(&ino).unwrap();
-        if let Ok(file) = OpenOptions::new().write(true).open(&attrs.real_path) {
-            file.write_all_at(data, offset as u64).unwrap();
+        let attrs = match self.attrs.get(&ino) {
+            Some(x) => x,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
 
-            let metadata = file.metadata().unwrap();
-            self.attrs
-                .insert(ino, (metadata, attrs.real_path.clone()).into());
-            reply.written(data.len() as u32);
-        } else {
-            reply.error(libc::ENOENT);
+        let write = || -> io::Result<Metadata> {
+            let mut file = OpenOptions::new().write(true).open(&attrs.real_path)?;
+            file.seek(SeekFrom::Start(offset as u64))?;
+            file.write_all(data)?;
+            let metadata = file.metadata()?;
+            Ok(metadata)
+        };
+
+        match write() {
+            Ok(metadata) => {
+                self.attrs
+                    .insert(ino, (metadata, attrs.real_path.clone()).into());
+                reply.written(data.len() as u32);
+            }
+            Err(e) => {
+                reply.error(e.raw_os_error().unwrap_or(libc::EIO));
+            }
         }
     }
 
@@ -720,12 +769,12 @@ impl Filesystem for TracerFS {
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        debug!("release(ino={}, fh={}, flags={})", ino, fh, flags);
+        info!("release(ino={}, fh={}, flags={})", ino, fh, flags);
         reply.ok();
     }
 
     fn opendir(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
-        debug!("opendir(ino={}, flags={})", ino, flags);
+        info!("opendir(ino={}, flags={})", ino, flags);
         let (_access_mask, read, write) = match flags & libc::O_ACCMODE {
             libc::O_RDONLY => {
                 // Behavior is undefined, but most filesystems return EACCES
@@ -752,11 +801,17 @@ impl Filesystem for TracerFS {
         match self.attrs.get(&ino) {
             Some(attrs) => {
                 if attrs.kind == FileKind::Directory {
-                    let file = OpenOptions::new()
+                    let file = match OpenOptions::new()
                         .write(write)
                         .read(read)
                         .open(&attrs.real_path)
-                        .unwrap();
+                    {
+                        Ok(x) => x,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
 
                     let file_handle = file.as_raw_fd() as u64;
                     reply.opened(file_handle, 0);
@@ -778,13 +833,31 @@ impl Filesystem for TracerFS {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        debug!("readdir(ino={}, fh={}, offset={})", ino, fh, offset);
+        info!("readdir(ino={}, fh={}, offset={})", ino, fh, offset);
         if let Some(attrs) = self.attrs.get(&ino) {
             if attrs.kind == FileKind::Directory {
                 let mut entries = Vec::new();
-                for entry in fs::read_dir(&attrs.real_path).unwrap() {
-                    let entry = entry.unwrap();
-                    let metadata = entry.metadata().unwrap();
+                for entry in match fs::read_dir(&attrs.real_path) {
+                    Ok(x) => x,
+                    Err(_) => {
+                        reply.error(libc::EIO);
+                        return;
+                    }
+                } {
+                    let entry = match entry {
+                        Ok(x) => x,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
+                    let metadata = match entry.metadata() {
+                        Ok(x) => x,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
                     let kind = as_file_kind(metadata.mode());
                     let file_name = entry.file_name();
                     let inode = metadata.ino();
@@ -812,17 +885,29 @@ impl Filesystem for TracerFS {
     }
 
     fn releasedir(&mut self, _req: &Request<'_>, ino: u64, fh: u64, flags: i32, reply: ReplyEmpty) {
-        debug!("releasedir(ino={}, fh={}, flags={})", ino, fh, flags);
+        info!("releasedir(ino={}, fh={}, flags={})", ino, fh, flags);
         reply.ok();
     }
 
     fn statfs(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyStatfs) {
-        debug!("statfs(ino={})", ino);
+        info!("statfs(ino={})", ino);
 
         let mut statfs: libc::statvfs = unsafe { std::mem::zeroed() };
-        let attrs = self.attrs.get(&ino).unwrap();
+        let attrs = match self.attrs.get(&ino) {
+            Some(x) => x,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
         let path = Path::new(&attrs.real_path);
-        let fd = path.as_os_str().to_str().unwrap();
+        let fd = match path.as_os_str().to_str() {
+            Some(x) => x,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
 
         unsafe {
             libc::statvfs(fd.as_ptr() as *const i8, &mut statfs);
@@ -839,6 +924,90 @@ impl Filesystem for TracerFS {
             statfs.f_frsize as u32,
         );
     }
+
+    fn access(&mut self, req: &Request<'_>, ino: u64, mask: i32, reply: ReplyEmpty) {
+        info!("access(ino={}, mask={})", ino, mask);
+        match self.attrs.get(&ino) {
+            Some(attrs) => {
+                if check_access(attrs.uid, attrs.gid, attrs.mode, req.uid(), req.gid(), mask) {
+                    reply.ok();
+                } else {
+                    reply.error(libc::EACCES);
+                }
+            }
+            None => {
+                reply.error(libc::ENOENT);
+            }
+        }
+    }
+
+    // No need to implement this, as it will call mknod() and open() instead
+    // fn create(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, mode: u32, umask: u32, flags: i32, reply: ReplyCreate)
+
+    fn fallocate(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _offset: i64,
+        _length: i64,
+        _mode: i32,
+        _reply: ReplyEmpty,
+    ) {
+        todo!("fallocate()")
+    }
+
+    fn copy_file_range(
+        &mut self,
+        _req: &Request<'_>,
+        _ino_in: u64,
+        _fh_in: u64,
+        _offset_in: i64,
+        _ino_out: u64,
+        _fh_out: u64,
+        _offset_out: i64,
+        _len: u64,
+        _flags: u32,
+        _reply: ReplyWrite,
+    ) {
+        todo!("copy_file_range()")
+    }
+}
+
+fn check_access(
+    file_uid: u32,
+    file_gid: u32,
+    file_mode: u32,
+    uid: u32,
+    gid: u32,
+    mut access_mask: i32,
+) -> bool {
+    // F_OK tests for existence of file
+    if access_mask == libc::F_OK {
+        return true;
+    }
+
+    let file_mode: i32 = Wrapping(file_mode as i32).0;
+
+    // root is allowed to read & write anything
+    if uid == 0 {
+        // root only allowed to exec if one of the X bits is set
+        access_mask &= libc::X_OK;
+        access_mask -= access_mask & (file_mode >> 6);
+        access_mask -= access_mask & (file_mode >> 3);
+        access_mask -= access_mask & file_mode;
+        return access_mask == 0;
+    }
+
+    if uid == file_uid {
+        access_mask -= access_mask & (file_mode >> 6);
+    } else if gid == file_gid {
+        access_mask -= access_mask & (file_mode >> 3);
+    } else {
+        access_mask -= access_mask & file_mode;
+    }
+
+    return access_mask == 0;
 }
 
 fn as_file_kind(mut mode: u32) -> FileKind {
@@ -855,107 +1024,28 @@ fn as_file_kind(mut mode: u32) -> FileKind {
     }
 }
 
-// fn main() {
-//     let matches = Command::new("Fuser")
-//         .version(crate_version!())
-//         .author("Christopher Berner")
-//         .arg(
-//             Arg::new("data-dir")
-//                 .long("data-dir")
-//                 .value_name("DIR")
-//                 .default_value("/tmp/fuser")
-//                 .help("Set local directory used to store data")
-//                 .takes_value(true),
-//         )
-//         .arg(
-//             Arg::new("mount-point")
-//                 .long("mount-point")
-//                 .value_name("MOUNT_POINT")
-//                 .default_value("")
-//                 .help("Act as a client, and mount FUSE at given path")
-//                 .takes_value(true),
-//         )
-//         .arg(
-//             Arg::new("direct-io")
-//                 .long("direct-io")
-//                 .requires("mount-point")
-//                 .help("Mount FUSE with direct IO"),
-//         )
-//         .arg(Arg::new("fsck").long("fsck").help("Run a filesystem check"))
-//         .arg(
-//             Arg::new("suid")
-//                 .long("suid")
-//                 .help("Enable setuid support when run as root"),
-//         )
-//         .arg(
-//             Arg::new("v")
-//                 .short('v')
-//                 .multiple_occurrences(true)
-//                 .help("Sets the level of verbosity"),
-//         )
-//         .get_matches();
-//
-//     let verbosity: u64 = matches.occurrences_of("v");
-//     let log_level = match verbosity {
-//         0 => LevelFilter::Error,
-//         1 => LevelFilter::Warn,
-//         2 => LevelFilter::Info,
-//         3 => LevelFilter::Debug,
-//         _ => LevelFilter::Trace,
-//     };
-//     env_logger::builder()
-//         .format_timestamp_nanos()
-//         .filter_level(log_level)
-//         .init();
-//
-//     let mut options = vec![MountOption::FSName("fuser".to_string())];
-//
-//     #[cfg(feature = "abi-7-26")]
-//     {
-//         if matches.is_present("suid") {
-//             info!("setuid bit support enabled");
-//             options.push(MountOption::Suid);
-//         } else {
-//             options.push(MountOption::AutoUnmount);
-//         }
-//     }
-//     #[cfg(not(feature = "abi-7-26"))]
-//     {
-//         options.push(MountOption::AutoUnmount);
-//     }
-//     if let Ok(enabled) = fuse_allow_other_enabled() {
-//         if enabled {
-//             options.push(MountOption::AllowOther);
-//         }
-//     } else {
-//         eprintln!("Unable to read /etc/fuse.conf");
-//     }
-//
-//     let data_dir: String = matches.value_of("data-dir").unwrap_or_default().to_string();
-//
-//     let mountpoint: String = matches
-//         .value_of("mount-point")
-//         .unwrap_or_default()
-//         .to_string();
-//
-//     let result = fuser::mount2(
-//         TracerFS::new(
-//             data_dir,
-//             matches.is_present("direct-io"),
-//             matches.is_present("suid"),
-//         ),
-//         mountpoint,
-//         &options,
-//     );
-//     if let Err(e) = result {
-//         // Return a special error code for permission denied, which usually indicates that
-//         // "user_allow_other" is missing from /etc/fuse.conf
-//         if e.kind() == ErrorKind::PermissionDenied {
-//             error!("{}", e.to_string());
-//             std::process::exit(2);
-//         }
-//     }
-// }
+fn create_new(path: &str) -> io::Result<File> {
+    if !Path::new(&path).exists() {
+        return File::create(path);
+    }
+
+    return File::open(path);
+}
+
+fn get_logger_format() -> impl Fn(&mut Formatter, &Record) -> io::Result<()> {
+    return |buf: &mut Formatter, record: &Record| {
+        writeln!(
+            buf,
+            "{}:{} [{}] - {}",
+            record
+                .file()
+                .map_or("unknown", |f| f.split("/").last().unwrap_or("unknown")),
+            record.line().unwrap_or(0),
+            record.level(),
+            record.args()
+        )
+    };
+}
 
 fn main() {
     let matches = Command::new("Cairn")
@@ -975,32 +1065,222 @@ fn main() {
         // .arg(Arg::new("v").short('v').help("Sets the level of verbosity"))
         .get_matches();
 
-    // let verbosity = matches.get_one::<u64>("v").unwrap();
-    // let verbosity
-    // let log_level = match verbosity {
-    //     0 => LevelFilter::Error,
-    //     1 => LevelFilter::Warn,
-    //     2 => LevelFilter::Info,
-    //     3 => LevelFilter::Debug,
-    //     _ => LevelFilter::Trace,
-    // };
+    let root = matches.get_one::<String>("root").unwrap().to_string();
+    let mountpoint = matches.get_one::<String>("mount-point").unwrap();
+    let target = Box::new(create_new(format!("{root}/tracer.log").as_str()).unwrap());
 
-    env_logger::builder()
-        .format_timestamp_nanos()
+    Builder::new()
+        .format(get_logger_format())
+        .target(env_logger::Target::Pipe(target))
         .filter_level(LevelFilter::Trace)
         .init();
 
-    let root = matches.get_one::<String>("root").unwrap().to_string();
-    let mountpoint = matches.get_one::<String>("mount-point").unwrap();
-    let options = vec![
-        MountOption::FSName("cairn-fuse".to_string()),
+    // unmount filesystem automatically when SIGINT is received
+    let (drop_send, drop_recv) = std::sync::mpsc::channel();
+    let ctrlc = drop_send.clone();
+    let destroy = drop_send.clone();
+
+    // handle graceful shutdown on ctrl-c
+    ctrlc::set_handler(move || {
+        info!("Received SIGINT, unmounting filesystem");
+        ctrlc.send(()).unwrap();
+    })
+    .unwrap();
+
+    let mount_options = [
         MountOption::AllowOther,
-        // MountOption::CUSTOM("nonempty".to_string()),
+        MountOption::FSName("cairn-fuse".to_string()),
     ];
+    let guard = fuser::spawn_mount2(
+        TracerFS::new(root.clone(), destroy),
+        mountpoint,
+        mount_options.as_slice(),
+    )
+    .unwrap();
 
-    let result = fuser::mount2(TracerFS::new(root), mountpoint, &options);
+    let () = drop_recv.recv().unwrap();
+    let _ = fs::remove_file(".cairn-fuse-ready");
+    drop(guard);
+}
 
-    if let Err(e) = result {
-        error!("Error mounting filesystem: {}", e);
+// todo make sure that all the tests can be run in parallel
+#[cfg(test)]
+mod tests {
+    use super::{create_new, TracerFS};
+    use fuser::{MountOption, Session};
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::process::Command;
+    use std::sync::Once;
+    use std::{fs, panic, thread};
+    use strsim::jaro;
+
+    const DIRS: [&str; 2] = ["./temp/mnt", "./temp/root"];
+    static INIT: Once = Once::new();
+
+    fn run_test<T>(test: T, target: &str) -> ()
+    where
+        T: FnOnce() -> () + panic::UnwindSafe,
+    {
+        setup(get_current_log_path(target));
+
+        let (send, _) = std::sync::mpsc::channel();
+        let mount_options = [
+            MountOption::AllowOther,
+            MountOption::AutoUnmount,
+            MountOption::FSName("cairn-fuse-test".to_string()),
+        ];
+        let mut session = Session::new(
+            TracerFS::new(DIRS[0].to_string(), send.clone()),
+            DIRS[1].as_ref(),
+            &mount_options,
+        )
+        .unwrap();
+        let mut unmounter = session.unmount_callable();
+
+        thread::spawn(move || {
+            session.run().unwrap();
+        });
+
+        // wait for the filesystem to be mounted
+        // TODO: remove this and wait for session to be mounted
+        thread::sleep(std::time::Duration::from_secs(1));
+
+        let result = panic::catch_unwind(|| {
+            test();
+        });
+
+        unmounter.unmount().unwrap();
+        teardown();
+
+        // assert equality of the log files
+        match compare_contents(get_current_log_path(target), get_previous_log_path(target)) {
+            Ok(are_equal) => {
+                assert!(are_equal);
+                return;
+            }
+            Err(_) => {
+                // Some of the paths didn't exist, in that case ignore
+            }
+        }
+
+        // assert that logfile contains the target
+        let contents = fs::read_to_string(get_current_log_path(target)).unwrap();
+        assert!(contents.contains(target));
+
+        if result.is_ok() {
+            let contents = fs::read_to_string(get_current_log_path(target)).unwrap();
+
+            let mut f = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .create(true)
+                .open(get_previous_log_path(target))
+                .unwrap();
+            f.write_all(contents.as_bytes()).unwrap();
+            f.flush().unwrap();
+
+            fs::remove_file(get_current_log_path(target)).unwrap();
+
+            assert!(true);
+            return;
+        }
+
+        assert!(false)
     }
+
+    fn setup(path: String) {
+        for dir in DIRS.iter() {
+            Command::new("mkdir").args(&["-p", dir]).output().unwrap();
+        }
+
+        INIT.call_once(|| {
+            let target = Box::new(create_new(&path).unwrap());
+            env_logger::Builder::new()
+                .format(super::get_logger_format())
+                .target(env_logger::Target::Pipe(target))
+                .filter_level(log::LevelFilter::Trace)
+                .is_test(true)
+                .init();
+        })
+    }
+
+    fn teardown() {
+        // somehow unmounting is not working as expected so I have to call the umount util manually
+        Command::new("umount").args(&[DIRS[0]]).output().unwrap();
+        for dir in DIRS.iter() {
+            Command::new("rm").args(&["-rf", dir]).output().unwrap();
+        }
+    }
+
+    // using Jaro distance (faster than Levenshtein)
+    fn compare_contents(old: String, new: String) -> std::io::Result<bool> {
+        let old_contents = fs::read_to_string(old)?;
+        let new_contents = fs::read_to_string(new)?;
+
+        // let d = normalized_damerau_levenshtein(&old_contents, &new_contents);
+        // let min_d = std::cmp::min(old_contents.len(), new_contents.len());
+        // let d = hamming(&old_contents, &new_contents).expect("Could not compare contents");
+        // let sim = 1.0 - (d as f64 / min_d as f64);
+        let d = jaro(&old_contents, &new_contents);
+        println!("Distance: {}", d);
+        Ok((1.0 - d) < 0.15)
+    }
+
+    fn get_current_log_path(target: &str) -> String {
+        return format!("./test-dir/{target}.log");
+    }
+
+    fn get_previous_log_path(target: &str) -> String {
+        return format!("./test-dir/previous/{target}.log");
+    }
+
+    #[test]
+    fn init() {
+        run_test(|| {}, "init")
+    }
+
+    #[test]
+    fn touch() {
+        run_test(
+            || {
+                Command::new("touch")
+                    .args(&[format!("{}/touch.txt", DIRS[1])])
+                    .output()
+                    .unwrap();
+            },
+            "touch",
+        )
+    }
+
+    #[test]
+    fn mkdir() {
+        run_test(
+            || {
+                Command::new("mkdir")
+                    .args(&[format!("{}/mkdir", DIRS[1])])
+                    .output()
+                    .unwrap();
+            },
+            "mkdir",
+        )
+    }
+
+    // #[test]
+    // fn echo_with_output_redirection() {
+    //     run_test(
+    //         || {
+    //             Command::new("echo")
+    //                 .args(&[
+    //                     "hello world",
+    //                     ">",
+    //                     //format!("{}/echo_with_output_redirection.txt", DIRS[1]),
+    //                     "/tmp/echo_with_output_redirection.txt",
+    //                 ])
+    //                 .output()
+    //                 .unwrap();
+    //         },
+    //         "echo_with_output_redirection",
+    //     )
+    // }
 }
