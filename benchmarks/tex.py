@@ -1,5 +1,5 @@
-import sys
 import glob
+import sys
 import json
 import os
 
@@ -27,9 +27,9 @@ with open(f'{result_dir}/results.tex', 'w') as f:
     \centering
     \begin{tabularx}{0.8\textwidth}{
         l
-       *{3}{>{\centering\arraybackslash}X}
+       *{4}{>{\centering\arraybackslash}X}
     }\toprule
-    & {Local} & {Docker} & {Cairn} \\\midrule
+    & {Local} & {Docker} & {Docker with FUSE} & {Cairn} \\\midrule
 """
     footer = r"""    \bottomrule
     \end{tabularx}
@@ -57,8 +57,8 @@ with open(f'{result_dir}/results.tex', 'w') as f:
                 for name in names:
                     jsons.append(glob.glob(f'{result_dir}/{d}/{i}/{name}*.json'))
 
-                for json in jsons:
-                    mean, std = load_data(json[0])
+                for j in jsons:
+                    mean, std = load_data(j[0])
                     row.append(f'{int(mean)}({int(std)})')
 
                 rows.append(row)
