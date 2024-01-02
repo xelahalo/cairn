@@ -6,11 +6,12 @@ mod util;
 use crate::app::App;
 use clap::{crate_version, Arg, Command};
 use error::AppError;
+use uuid::Uuid;
 
-const MNT_DIR: &str = "/host_mnt";
 const CHROOT_DIR: &str = "/usr/src/fusemount";
 const WORK_DIR: &str = "workdir";
 const CONTAINER_NAME: &str = "build-env";
+const LOG_DIR: &str = "/usr/src/app/tmp";
 
 fn main() -> Result<(), AppError> {
     let matches = Command::new("Cairn")
@@ -21,55 +22,35 @@ fn main() -> Result<(), AppError> {
             Arg::new("cmd")
                 .help("Command to run in the build environment. Must be quoted.")
                 .num_args(1)
-                .required(true)
-        )
-        .arg(
-            Arg::new("container")
-                .help("Specify the container to use. If not specified will start the container process and tear it down after use.")
-                .num_args(1)
-                .required(false)
-                .short('c')
-                .long("container")
+                .required(true),
         )
         .get_matches();
 
-    let container_given: bool;
-    let container: &str = match matches.get_one::<String>("container") {
-        Some(container) => {
-            container_given = true;
-            container
-        }
-        None => {
-            container_given = false;
-            CONTAINER_NAME
-        }
-    };
     let parsed_cmd: &str = match matches.get_one::<String>("cmd") {
         Some(cmd) => cmd,
         None => panic!("No command provided"),
     }
     .trim_matches(|c| c == '\'' || c == '"');
 
-    let init_cmd = command::Command::new("bash", vec!["init.sh", MNT_DIR]);
-    let build_cmd = command::Command::new(
+    let log_name = format!("{}/{}.log", LOG_DIR, Uuid::new_v4().to_string());
+
+    // create log file then cd into folder where we run command
+    let cmd = command::Command::new(
         "docker",
         vec![
             "exec",
-            container,
-            "chroot",
-            CHROOT_DIR,
+            CONTAINER_NAME,
             "/bin/bash",
             "-c",
-            format!("cd {} && {}", WORK_DIR, parsed_cmd).as_str(),
+            format!(
+                "mkdir -p {} && touch {} && chroot {} /bin/bash -c 'cd {} && {}'",
+                LOG_DIR, log_name, CHROOT_DIR, WORK_DIR, parsed_cmd
+            )
+            .as_str(),
         ],
     );
-    let teardown_cmd = command::Command::new("bash", vec!["teardown.sh"]);
 
-    let app = if container_given {
-        App::new(vec![&build_cmd])
-    } else {
-        App::new(vec![&init_cmd, &build_cmd, &teardown_cmd])
-    };
+    let app = App::new(vec![&cmd]);
 
     app.execute()?;
 

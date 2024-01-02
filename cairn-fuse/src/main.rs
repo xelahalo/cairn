@@ -1047,11 +1047,42 @@ fn get_logger_format() -> impl Fn(&mut Formatter, &Record) -> io::Result<()> {
     };
 }
 
+struct Tracer {
+    log_path: String,
+}
+
+impl Tracer {
+    fn new(log_path: String) -> Tracer {
+        Tracer { log_path }
+    }
+
+    fn log(&mut self, op: char, paths: &[&str]) {
+        if let Ok(mut f) = OpenOptions::new().append(true).open(&self.log_path) {
+            let mut path = String::new();
+            for p in paths {
+                path.push_str(p);
+                if p != &paths[paths.len() - 1] {
+                    path.push_str("|");
+                }
+            }
+
+            if let Ok(res) = f.append(format!("{}|{}\n", op, path).as_bytes()) {
+                return;
+            }
+        }
+    }
+}
+
 fn main() {
     let matches = Command::new("Cairn")
         .author("xelahalo <xelahalo@gmail.com>")
         .version(crate_version!())
         .about("Filesystem implementation for tracing I/O operations for forward build systems")
+        .arg(
+            Arg::new("log-path")
+                .help("Path to the log file")
+                .required(true),
+        )
         .arg(
             Arg::new("root")
                 .help("Root directory for the filesystem")
@@ -1068,6 +1099,7 @@ fn main() {
     let root = matches.get_one::<String>("root").unwrap().to_string();
     let mountpoint = matches.get_one::<String>("mount-point").unwrap();
     let target = Box::new(create_new(format!("{root}/tracer.log").as_str()).unwrap());
+    let tracer = Tracer::new(matches.get_one("log-path").unwrap().to_string());
 
     Builder::new()
         .format(get_logger_format())
