@@ -7,5 +7,5 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.4", features = ["cargo"] }
-uuid = { version = "0.8", features = ["v4"] }
+uuid = { version = "1.6.1", features = ["v4"] }
 log = "0.4.20"
