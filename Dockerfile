@@ -5,7 +5,7 @@ RUN mkdir /usr/src/fusemount /usr/src/dockermount
 
 RUN apt update && \
     # hyperfine is only needed for benchmarking
-    apt install -y fuse3 libfuse3-dev=3.14.0-4 kmod rsync hyperfine && \
+    apt install -y strace fuse3 libfuse3-dev=3.14.0-4 kmod rsync hyperfine && \
     # 'mknod': creates a special file
     # 'Name': /dev/fuse name of the driver 
     # '{ b | c }': c, which correspons to character-oriented device

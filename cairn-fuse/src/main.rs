@@ -7,7 +7,7 @@ use fuser::{
     Filesystem, KernelConfig, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty,
     ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request, TimeOrNow, FUSE_ROOT_ID,
 };
-use log::{debug, LevelFilter};
+use log::{debug, info, LevelFilter};
 use log::{warn, Record};
 use std::cmp::min;
 use std::collections::BTreeMap;
@@ -24,7 +24,6 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, fs, io};
-use uuid::Uuid;
 use walkdir::WalkDir;
 
 const FMODE_EXEC: i32 = 0x20;
@@ -104,8 +103,6 @@ impl From<(fs::Metadata, String)> for InodeAttributes {
         let uid = payload.0.uid();
         let gid = payload.0.gid();
         let mode = payload.0.mode();
-        let atime = time_from_system_time(&payload.0.accessed().unwrap());
-        let mtime = time_from_system_time(&payload.0.modified().unwrap());
         let kind = as_file_kind(payload.0.mode());
         let len = payload.0.len();
         let nlinks = payload.0.nlink();
@@ -113,6 +110,15 @@ impl From<(fs::Metadata, String)> for InodeAttributes {
         let blocks = payload.0.blocks();
         let rdev = payload.0.rdev();
         let real_path = payload.1;
+
+        let atime = time_from_system_time(&match payload.0.accessed() {
+            Ok(x) => x,
+            Err(_) => panic!("Access time not supported on this platform."),
+        });
+        let mtime = time_from_system_time(&match payload.0.modified() {
+            Ok(x) => x,
+            Err(_) => panic!("Modification time not supported on this platform."),
+        });
 
         InodeAttributes {
             ino,
@@ -157,31 +163,39 @@ impl From<InodeAttributes> for fuser::FileAttr {
 // In memory storing of the attributes of the files
 struct TracerFS {
     root: String,
-    tracer: Tracer,
     attrs: BTreeMap<u64, InodeAttributes>,
     destroy: Sender<()>,
 }
 
 impl TracerFS {
-    fn new(root: String, tracer: Tracer, destroy: Sender<()>) -> TracerFS {
+    fn new(root: String, destroy: Sender<()>) -> TracerFS {
         {
             TracerFS {
                 root,
-                tracer,
                 attrs: BTreeMap::new(),
                 destroy,
             }
         }
     }
 
-    fn get_path(&mut self, parent: u64, name: &OsStr) -> PathBuf {
-        let parent_context = self.attrs.get(&parent).unwrap();
+    fn get_path(&mut self, parent: u64, name: &OsStr) -> Result<PathBuf, c_int> {
+        let parent_context = match self.attrs.get(&parent) {
+            Some(x) => x,
+            None => {
+                return Err(libc::ENOENT);
+            }
+        };
         let parent_path = Path::new(&parent_context.real_path);
-        parent_path.join(name)
+        Ok(parent_path.join(name))
     }
 
     fn lookup_name(&mut self, parent: u64, name: &OsStr) -> Result<InodeAttributes, c_int> {
-        let path = self.get_path(parent, name);
+        let path = match self.get_path(parent, name) {
+            Ok(x) => x,
+            Err(c) => {
+                return Err(c);
+            }
+        };
         let metadata = fs::metadata(path.clone());
         match metadata {
             Ok(metadata) => {
@@ -313,7 +327,6 @@ impl Filesystem for TracerFS {
 
         match self.attrs.get(&ino) {
             Some(attrs) => {
-                self.tracer.log('r', &["getattr", &attrs.real_path]);
                 reply.attr(&Duration::new(0, 0), &(*attrs).clone().into());
             }
             None => {
@@ -355,7 +368,7 @@ impl Filesystem for TracerFS {
                 return;
             }
 
-            self.tracer.log('w', &["chmod", &attrs.real_path]);
+            trace(req.pid(), 'w', &["chmod", &attrs.real_path]);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -369,7 +382,7 @@ impl Filesystem for TracerFS {
         if uid.is_some() || gid.is_some() {
             debug!("chown() called with {:?} {:?} {:?}", ino, uid, gid);
 
-            self.tracer.log('w', &["chown", &attrs.real_path]);
+            trace(req.pid(), 'w', &["chown", &attrs.real_path]);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -410,7 +423,7 @@ impl Filesystem for TracerFS {
                 },
             };
 
-            self.tracer.log('w', &["truncate", &attrs.real_path]);
+            trace(req.pid(), 'w', &["truncate", &attrs.real_path]);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -423,9 +436,9 @@ impl Filesystem for TracerFS {
 
         let now = time_now();
         if let Some(atime) = atime {
-            debug!("utimens() called with {:?} {:?}", ino, atime);
+            debug!("utime() called with {:?} {:?}", ino, atime);
 
-            self.tracer.log('w', &["utimens", &attrs.real_path]);
+            trace(req.pid(), 't', &["utime", &attrs.real_path]);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -444,9 +457,9 @@ impl Filesystem for TracerFS {
         }
 
         if let Some(mtime) = mtime {
-            debug!("utimens() called with {:?} {:?}", ino, mtime);
+            debug!("utime() called with {:?} {:?}", ino, mtime);
 
-            self.tracer.log('w', &["utimens", &attrs.real_path]);
+            trace(req.pid(), 't', &["utime", &attrs.real_path]);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -482,22 +495,39 @@ impl Filesystem for TracerFS {
 
                     // open file at link and read it
                     if let Ok(mut file) = File::open(link.clone()) {
-                        let file_size = file.metadata().unwrap().len();
+                        let file_size = match file.metadata() {
+                            Ok(x) => x,
+                            Err(_) => {
+                                reply.error(libc::EIO);
+                                return;
+                            }
+                        }
+                        .len();
                         let mut buffer = vec![0; file_size as usize];
-                        file.read_exact(&mut buffer).unwrap();
+                        match file.read_exact(&mut buffer) {
+                            Ok(x) => x,
+                            Err(_) => {
+                                reply.error(libc::EIO);
+                                return;
+                            }
+                        };
 
-                        self.tracer.log('r', &["readlink", &link.to_str().unwrap()]);
+                        //trace(req.pid(), 'r', &["readlink", &link.to_str().unwrap()]);
 
                         reply.data(&buffer);
+                        return;
                     } else {
                         reply.error(libc::ENOENT);
+                        return;
                     }
                 } else {
                     reply.error(libc::EINVAL);
+                    return;
                 }
             }
             None => {
                 reply.error(libc::ENOENT);
+                return;
             }
         }
     }
@@ -516,7 +546,13 @@ impl Filesystem for TracerFS {
             "mknod(parent={}, name={:?}, mode={}, rdev={})",
             parent, name, mode, rdev
         );
-        let path = self.get_path(parent, name);
+        let path = match self.get_path(parent, name) {
+            Ok(x) => x,
+            Err(c) => {
+                reply.error(c);
+                return;
+            }
+        };
 
         let file_type = mode & libc::S_IFMT as u32;
         if file_type != libc::S_IFREG as u32
@@ -537,7 +573,6 @@ impl Filesystem for TracerFS {
 
         let result = File::create(path.clone());
         self.handle_metadata_on_change(&path, result, Reply::Entry(reply));
-        self.tracer.log('t', &["mknod", &path.to_str().unwrap()]);
     }
 
     fn mkdir(
@@ -550,23 +585,41 @@ impl Filesystem for TracerFS {
         reply: ReplyEntry,
     ) {
         debug!("mkdir(parent={}, name={:?}, mode={})", parent, name, mode);
-        let path = self.get_path(parent, name);
+        let path = match self.get_path(parent, name) {
+            Ok(x) => x,
+            Err(c) => {
+                reply.error(c);
+                return;
+            }
+        };
 
         self.handle_metadata_on_change(&path, fs::create_dir(path.clone()), Reply::Entry(reply));
     }
 
-    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+    fn unlink(&mut self, req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         debug!("unlink(parent={}, name={:?})", parent, name);
-        let path = self.get_path(parent, name);
+        let path = match self.get_path(parent, name) {
+            Ok(x) => x,
+            Err(c) => {
+                reply.error(c);
+                return;
+            }
+        };
         let metadata = fs::metadata(path.clone());
 
+        trace(req.pid(), 'd', &["unlink", &path.to_str().unwrap()]);
         self.handle_metadata_on_removal(metadata, fs::remove_file(path.clone()), reply);
-        self.tracer.log('d', &["unlink", &path.to_str().unwrap()]);
     }
 
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         debug!("rmdir(parent={}, name={:?})", parent, name);
-        let path = self.get_path(parent, name);
+        let path = match self.get_path(parent, name) {
+            Ok(x) => x,
+            Err(c) => {
+                reply.error(c);
+                return;
+            }
+        };
         let metadata = fs::metadata(path.clone());
 
         self.handle_metadata_on_removal(metadata, fs::remove_dir(path), reply);
@@ -584,20 +637,24 @@ impl Filesystem for TracerFS {
             "symlink(parent={}, name={:?}, link={:?})",
             parent, name, link
         );
-        let path = self.get_path(parent, name);
+        let path = match self.get_path(parent, name) {
+            Ok(x) => x,
+            Err(c) => {
+                reply.error(c);
+                return;
+            }
+        };
 
         self.handle_metadata_on_change(
             &path,
             ufs::symlink(link, path.clone()),
             Reply::Entry(reply),
         );
-
-        self.tracer.log('t', &["symlink", &path.to_str().unwrap()]);
     }
 
     fn rename(
         &mut self,
-        _req: &Request<'_>,
+        req: &Request<'_>,
         parent: u64,
         name: &OsStr,
         newparent: u64,
@@ -609,17 +666,36 @@ impl Filesystem for TracerFS {
             "rename(parent={}, name={:?}, newparent={}, newname={:?})",
             parent, name, newparent, newname
         );
-        let path = self.get_path(parent, name);
-        let newpath = self.get_path(newparent, newname);
+        let path = match self.get_path(parent, name) {
+            Ok(x) => x,
+            Err(c) => {
+                reply.error(c);
+                return;
+            }
+        };
+        let newpath = match self.get_path(newparent, newname) {
+            Ok(x) => x,
+            Err(c) => {
+                reply.error(c);
+                return;
+            }
+        };
+
+        trace(
+            req.pid(),
+            'm',
+            &[
+                "rename",
+                &path.to_str().unwrap(),
+                &newpath.to_str().unwrap(),
+            ],
+        );
 
         self.handle_metadata_on_change(
             &newpath,
             fs::rename(path.clone(), newpath.clone()),
             Reply::Empty(reply),
         );
-
-        self.tracer
-            .log('m', &[&path.to_str().unwrap(), &newpath.to_str().unwrap()]);
     }
 
     fn link(
@@ -634,19 +710,29 @@ impl Filesystem for TracerFS {
             "link(ino={}, newparent={}, newname={:?})",
             ino, newparent, newname
         );
-        let path = self.get_path(ino, OsStr::new(""));
-        let newpath = self.get_path(newparent, newname);
+        let path = match self.get_path(ino, OsStr::new("")) {
+            Ok(x) => x,
+            Err(c) => {
+                reply.error(c);
+                return;
+            }
+        };
+        let newpath = match self.get_path(newparent, newname) {
+            Ok(x) => x,
+            Err(c) => {
+                reply.error(c);
+                return;
+            }
+        };
 
         self.handle_metadata_on_change(
             &newpath,
             fs::hard_link(path.clone(), newpath.clone()),
             Reply::Entry(reply),
         );
-
-        self.tracer.log('t', &["symlink", &path.to_str().unwrap()]);
     }
 
-    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn open(&mut self, req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         debug!("open(ino={}, flags={})", ino, flags);
         let (_access_mask, read, write) = match flags & libc::O_ACCMODE {
             libc::O_RDONLY => {
@@ -687,6 +773,10 @@ impl Filesystem for TracerFS {
                     };
 
                     let file_handle = file.as_raw_fd() as u64;
+
+                    // access mode has already been checked, so we can safely default to a read trace
+                    let mode = if write { 'w' } else { 'r' };
+                    trace(req.pid(), mode, &["open", &attrs.real_path]);
                     reply.opened(file_handle, 0);
                 } else {
                     reply.error(libc::EISDIR);
@@ -729,7 +819,7 @@ impl Filesystem for TracerFS {
                             Ok(buffer) => {
                                 reply.data(&buffer);
 
-                                self.tracer.log('r', &["read", &attrs.real_path]);
+                                // trace(req.pid(), 'r', &["read", &attrs.real_path]);
                             }
                             Err(e) => {
                                 reply.error(e.raw_os_error().unwrap_or(libc::EIO));
@@ -785,7 +875,7 @@ impl Filesystem for TracerFS {
 
         match write() {
             Ok(metadata) => {
-                self.tracer.log('w', &["write", &attrs.real_path]);
+                // //trace(req.pid(), 'w', &["write", &attrs.real_path]);
 
                 self.attrs
                     .insert(ino, (metadata, attrs.real_path.clone()).into());
@@ -927,7 +1017,7 @@ impl Filesystem for TracerFS {
         reply.ok();
     }
 
-    fn statfs(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyStatfs) {
+    fn statfs(&mut self, req: &Request<'_>, ino: u64, reply: ReplyStatfs) {
         debug!("statfs(ino={})", ino);
 
         let mut statfs: libc::statvfs = unsafe { std::mem::zeroed() };
@@ -951,7 +1041,7 @@ impl Filesystem for TracerFS {
             libc::statvfs(fd.as_ptr() as *const i8, &mut statfs);
         }
 
-        self.tracer.log('q', &["statfs", &attrs.real_path]);
+        trace(req.pid(), 'q', &["statfs", &attrs.real_path]);
 
         reply.statfs(
             statfs.f_blocks.into(),
@@ -969,7 +1059,6 @@ impl Filesystem for TracerFS {
         debug!("access(ino={}, mask={})", ino, mask);
         match self.attrs.get(&ino) {
             Some(attrs) => {
-                self.tracer.log('q', &["access", &attrs.real_path]);
                 if check_access(attrs.uid, attrs.gid, attrs.mode, req.uid(), req.gid(), mask) {
                     reply.ok();
                 } else {
@@ -1070,80 +1159,29 @@ fn create_new(path: &str) -> io::Result<File> {
         return File::create(path);
     }
 
-    return File::open(path);
+    return OpenOptions::new().read(true).write(true).open(path);
 }
 
 fn get_logger_format() -> impl Fn(&mut Formatter, &Record) -> io::Result<()> {
     return |buf: &mut Formatter, record: &Record| {
-        writeln!(
-            buf,
-            "{}:{} [{}] - {}",
-            record
-                .file()
-                .map_or("unknown", |f| f.split("/").last().unwrap_or("unknown")),
-            record.line().unwrap_or(0),
-            record.level(),
-            record.args()
-        )
+        writeln!(buf, "[{}] {}", record.level(), record.args())
     };
 }
 
-struct Tracer {
-    log_path: String,
-    log_file: Option<PathBuf>,
-}
-
-impl Tracer {
-    fn new(log_path: String) -> Tracer {
-        Tracer {
-            log_path,
-            log_file: None,
+fn trace(pid: u32, op: char, paths: &[&str]) {
+    let path_str = paths.join("|");
+    let ppid_result = std::process::Command::new("ps")
+        .args(&["-o", "ppid= ", &pid.to_string()])
+        .output();
+    let ppid: i32 = match ppid_result {
+        Ok(output) => {
+            let ppid_str = String::from_utf8_lossy(&output.stdout);
+            ppid_str.trim().parse::<i32>().unwrap_or_else(|_| -1)
         }
-    }
-
-    fn log(&mut self, op: char, paths: &[&str]) {
-        if self
-            .log_file
-            .as_ref()
-            .map_or(true, |log_file| fs::metadata(log_file).is_err())
-        {
-            self.find_log_file();
-        }
-
-        if self.log_file.is_none() {
-            return;
-        }
-
-        if let Ok(mut file) = OpenOptions::new()
-            .write(true)
-            .append(true)
-            .open(&self.log_file.as_ref().unwrap())
-        {
-            let path_str = paths.join("|");
-            if writeln!(file, "{}|{}", op, path_str).is_err() {
-                eprintln!("Couldn't write to {}", &self.log_path);
-            }
-        }
-    }
-
-    fn find_log_file(&mut self) {
-        if let Ok(entries) = fs::read_dir(self.log_path.as_str()) {
-            for entry in entries.flatten() {
-                if entry
-                    .metadata()
-                    .ok()
-                    .map_or(false, |metadata| metadata.is_file())
-                {
-                    if let Some(file_name) = entry.path().file_stem() {
-                        if Uuid::parse_str(file_name.to_str().unwrap()).is_ok() {
-                            self.log_file = Some(entry.path());
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-    }
+        Err(_) => -1,
+    };
+    let time = time_from_system_time(&SystemTime::now());
+    info!("-> {}: {}|{}|{}|{}", time.0, pid, ppid, op, path_str)
 }
 
 fn main() {
@@ -1151,11 +1189,6 @@ fn main() {
         .author("xelahalo <xelahalo@gmail.com>")
         .version(crate_version!())
         .about("Filesystem implementation for tracing I/O operations for forward build systems")
-        .arg(
-            Arg::new("log-path")
-                .help("Path to the log file")
-                .required(true),
-        )
         .arg(
             Arg::new("root")
                 .help("Root directory for the filesystem")
@@ -1169,16 +1202,24 @@ fn main() {
         // .arg(Arg::new("v").short('v').help("Sets the level of verbosity"))
         .get_matches();
 
+    let level_filter = LevelFilter::Trace;
     let root = matches.get_one::<String>("root").unwrap().to_string();
     let mountpoint = matches.get_one::<String>("mount-point").unwrap();
     let target = Box::new(create_new(format!("{root}/tracer.log").as_str()).unwrap());
-    let tracer = Tracer::new(matches.get_one::<String>("log-path").unwrap().to_string());
+
+    if level_filter >= LevelFilter::Debug {
+        File::create("1_parsed_matches").expect("Failed to create 1");
+    }
 
     Builder::new()
         .format(get_logger_format())
         .target(env_logger::Target::Pipe(target))
-        .filter_level(LevelFilter::Trace)
+        .filter_level(level_filter)
         .init();
+
+    if level_filter >= LevelFilter::Debug {
+        File::create("2_init_logger").expect("Failed to create 2");
+    }
 
     // unmount filesystem automatically when SIGINT is received
     let (drop_send, drop_recv) = std::sync::mpsc::channel();
@@ -1192,16 +1233,26 @@ fn main() {
     })
     .unwrap();
 
+    if level_filter >= LevelFilter::Debug {
+        File::create("3_create_channel").expect("Failed to create 3");
+    }
+
     let mount_options = [
         MountOption::AllowOther,
         MountOption::FSName("cairn-fuse".to_string()),
     ];
-    let guard = fuser::spawn_mount2(
-        TracerFS::new(root.clone(), tracer, destroy),
+    let guard = match fuser::spawn_mount2(
+        TracerFS::new(root.clone(), destroy),
         mountpoint,
         mount_options.as_slice(),
-    )
-    .unwrap();
+    ) {
+        Ok(x) => x,
+        Err(_) => todo!(),
+    };
+
+    if level_filter >= LevelFilter::Debug {
+        File::create("4_mount").expect("Failed to create 4");
+    }
 
     let () = drop_recv.recv().unwrap();
     let _ = fs::remove_file(".cairn-fuse-ready");
@@ -1232,12 +1283,10 @@ mod tests {
             MountOption::FSName("cairn-fuse-test".to_string()),
         ];
 
-        let tracer = super::Tracer::new(get_current_log_path(target));
-
         let destroy = send.clone();
         thread::spawn(move || {
             let guard = fuser::spawn_mount2(
-                TracerFS::new(DIRS[0].to_string(), tracer, destroy),
+                TracerFS::new(DIRS[0].to_string(), destroy),
                 DIRS[1],
                 &mount_options,
             )

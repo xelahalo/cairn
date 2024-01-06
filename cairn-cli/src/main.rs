@@ -6,7 +6,6 @@ mod util;
 use crate::app::App;
 use clap::{crate_version, Arg, Command};
 use error::AppError;
-use uuid::Uuid;
 
 const CHROOT_DIR: &str = "/usr/src/fusemount";
 const WORK_DIR: &str = "workdir";
@@ -31,8 +30,6 @@ fn main() -> Result<(), AppError> {
         None => panic!("No command provided"),
     }
     .trim_matches(|c| c == '\'' || c == '"');
-
-    let log_name = format!("{}/{}.log", LOG_DIR, Uuid::new_v4().to_string());
 
     // create log file then cd into folder where we run command
     let cmd = command::Command::new(
