@@ -1,7 +1,7 @@
 #!/bin/bash
 
 usage() {
-	echo "Usage: $0 [-h] <mountpoint>" 1>&2
+	echo "Usage: $0 [-hb]" 1>&2
 	echo "  -h: Display this help message" 1>&2
   echo "  -b: Also build and run the benchmarking container" 1>&2
 	exit 1
@@ -28,12 +28,11 @@ done
 
 shift $((OPTIND - 1))
 
-if [ -z "${1}" ]; then
-	echo "Mountpoint is required" 1>&2
-	usage
+source ".env"
+if [ -z "$MNT_DIR" ]; then
+    echo "MNT_DIR is not set in the env file."
+    exit 1
 fi
-
-mountpoint=$1
 
 if ! docker info >/dev/null 2>&1; then
 	echo "Docker is not running. Quitting."
@@ -47,7 +46,7 @@ if [ "$BENCHMARK" = true ]; then
     --rm \
     --detach \
     --privileged \
-    --mount type=bind,source="$(pwd)/$mountpoint",target=/usr/src/dockermount,bind-propagation=rshared \
+    --mount type=bind,source="$(pwd)/$MNT_DIR",target=/usr/src/dockermount,bind-propagation=slave \
     --cap-add SYS_ADMIN \
     --name "build-env-bench" \
     -it "build-env:bench" 
@@ -58,8 +57,9 @@ docker run \
 	--rm \
   --detach \
 	--privileged \
-	--mount type=bind,source="$(pwd)/$mountpoint",target=/usr/src/dockermount,bind-propagation=rshared \
+	-v "$(pwd)/$MNT_DIR":/usr/src/dockermount \
 	--cap-add SYS_ADMIN \
 	--name "build-env" \
 	-it "build-env:test" 
 
+#	--mount type=bind,source="$(pwd)/$MNT_DIR",target=/usr/src/dockermount,bind-propagation=slave \

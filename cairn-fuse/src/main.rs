@@ -368,7 +368,7 @@ impl Filesystem for TracerFS {
                 return;
             }
 
-            trace(req.pid(), 'w', &["chmod", &attrs.real_path]);
+            trace(req.pid(), 'w', vec![&attrs.real_path, "chmod"]);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -382,7 +382,7 @@ impl Filesystem for TracerFS {
         if uid.is_some() || gid.is_some() {
             debug!("chown() called with {:?} {:?} {:?}", ino, uid, gid);
 
-            trace(req.pid(), 'w', &["chown", &attrs.real_path]);
+            trace(req.pid(), 'w', vec![&attrs.real_path, "chown"]);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -423,7 +423,7 @@ impl Filesystem for TracerFS {
                 },
             };
 
-            trace(req.pid(), 'w', &["truncate", &attrs.real_path]);
+            trace(req.pid(), 'w', vec![&attrs.real_path, "truncate"]);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -438,7 +438,7 @@ impl Filesystem for TracerFS {
         if let Some(atime) = atime {
             debug!("utime() called with {:?} {:?}", ino, atime);
 
-            trace(req.pid(), 't', &["utime", &attrs.real_path]);
+            trace(req.pid(), 't', vec![&attrs.real_path, "utime"]);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -459,7 +459,7 @@ impl Filesystem for TracerFS {
         if let Some(mtime) = mtime {
             debug!("utime() called with {:?} {:?}", ino, mtime);
 
-            trace(req.pid(), 't', &["utime", &attrs.real_path]);
+            trace(req.pid(), 't', vec![&attrs.real_path, "utime"]);
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -607,7 +607,7 @@ impl Filesystem for TracerFS {
         };
         let metadata = fs::metadata(path.clone());
 
-        trace(req.pid(), 'd', &["unlink", &path.to_str().unwrap()]);
+        trace(req.pid(), 'd', vec![&path.to_str().unwrap(), "unlink"]);
         self.handle_metadata_on_removal(metadata, fs::remove_file(path.clone()), reply);
     }
 
@@ -684,10 +684,10 @@ impl Filesystem for TracerFS {
         trace(
             req.pid(),
             'm',
-            &[
-                "rename",
+            vec![
                 &path.to_str().unwrap(),
                 &newpath.to_str().unwrap(),
+                "rename",
             ],
         );
 
@@ -776,7 +776,7 @@ impl Filesystem for TracerFS {
 
                     // access mode has already been checked, so we can safely default to a read trace
                     let mode = if write { 'w' } else { 'r' };
-                    trace(req.pid(), mode, &["open", &attrs.real_path]);
+                    trace(req.pid(), mode, vec![&attrs.real_path, "open"]);
                     reply.opened(file_handle, 0);
                 } else {
                     reply.error(libc::EISDIR);
@@ -1041,7 +1041,7 @@ impl Filesystem for TracerFS {
             libc::statvfs(fd.as_ptr() as *const i8, &mut statfs);
         }
 
-        trace(req.pid(), 'q', &["statfs", &attrs.real_path]);
+        trace(req.pid(), 'q', vec![&attrs.real_path, "statfs"]);
 
         reply.statfs(
             statfs.f_blocks.into(),
@@ -1155,11 +1155,16 @@ fn as_file_kind(mut mode: u32) -> FileKind {
 }
 
 fn create_new(path: &str) -> io::Result<File> {
-    if !Path::new(&path).exists() {
-        return File::create(path);
+    let mut c = false;
+    if Path::new(&path).exists() {
+        c = true;
     }
 
-    return OpenOptions::new().read(true).write(true).open(path);
+    return OpenOptions::new()
+        .create(c)
+        .write(true)
+        .append(true)
+        .open(path);
 }
 
 fn get_logger_format() -> impl Fn(&mut Formatter, &Record) -> io::Result<()> {
@@ -1168,11 +1173,20 @@ fn get_logger_format() -> impl Fn(&mut Formatter, &Record) -> io::Result<()> {
     };
 }
 
-fn trace(pid: u32, op: char, paths: &[&str]) {
+fn trace(
+    pid: u32,
+    op: char,
+    #[cfg(not(debug_assertions))] mut paths: Vec<&str>,
+    #[cfg(debug_assertions)] paths: Vec<&str>,
+) {
+    #[cfg(not(debug_assertions))]
+    paths.pop();
     let path_str = paths.join("|");
+
     let ppid_result = std::process::Command::new("ps")
         .args(&["-o", "ppid= ", &pid.to_string()])
         .output();
+
     let ppid: i32 = match ppid_result {
         Ok(output) => {
             let ppid_str = String::from_utf8_lossy(&output.stdout);
@@ -1180,7 +1194,9 @@ fn trace(pid: u32, op: char, paths: &[&str]) {
         }
         Err(_) => -1,
     };
+
     let time = time_from_system_time(&SystemTime::now());
+
     info!("-> {}: {}|{}|{}|{}", time.0, pid, ppid, op, path_str)
 }
 

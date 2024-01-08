@@ -36,11 +36,8 @@ elif [ -z "${3}" ]; then
 fi
 
 chroot_dir=$1
-echo "chroot_dir: $chroot_dir"
 workdir=$2
-echo "workdir: $workdir"
 command=$3
-echo "command: $command"
 
 if [ ! -d "$chroot_dir" ]; then
   echo "Directory $chroot_dir does not exist" 1>&2
