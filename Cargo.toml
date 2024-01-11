@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "cairn-cli",
+    "fsatrace",
     "cairn-fuse",
 ]
 resolver = "2"

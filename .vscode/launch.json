@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'cairn-cli'",
+            "name": "Debug executable 'fsatrace'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=cairn-cli",
-                    "--package=cairn-cli"
+                    "--bin=fsatrace",
+                    "--package=fsatrace"
                 ],
                 "filter": {
-                    "name": "cairn-cli",
+                    "name": "fsatrace",
                     "kind": "bin"
                 }
             },
@@ -25,16 +25,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'cairn-cli'",
+            "name": "Debug unit tests in executable 'fsatrace'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=cairn-cli",
-                    "--package=cairn-cli"
+                    "--bin=fsatrace",
+                    "--package=fsatrace"
                 ],
                 "filter": {
-                    "name": "cairn-cli",
+                    "name": "fsatrace",
                     "kind": "bin"
                 }
             },

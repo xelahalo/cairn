@@ -34,9 +34,21 @@ jobs:
     - name: Run the benchmarks
       run: bash benchmarks/run.sh -s 1 -e 101 -r 10
 
+    - name: Clone rattle repo
+      run: git clone https://github.com/xelahalo/rattle.git ./rattle
+
+    - name: Set up Haskell
+      uses: actions/setup-haskell@v1.1
+      with:
+        ghc-version: 9.8.1
+        cabal-version: 3.10.1.0
+
+    - name: Run benchmarks with rattle
+      run: bash benchmarks/rattle-benchmark.sh
+
     - name: Publish benchmark results
       if: success()
       uses: actions/upload-artifact@v3
       with:
         name: ${{ github.sha }} 
-        path: benchmarks/*.zip 
+        path: benchmarks/*.zip

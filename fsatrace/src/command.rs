@@ -17,6 +17,8 @@ pub struct Command {
     output_path: String,
     root_ppid: Option<u32>,
     start_time: u32,
+    options: Vec<char>,
+    mnt_dir: String,
 }
 
 #[derive(Clone)]
@@ -30,20 +32,33 @@ struct LogEntry {
 }
 
 impl Command {
-    pub fn new(executable: &str, args: Vec<&str>, output_path: &str) -> Self {
+    pub fn new(
+        executable: &str,
+        args: Vec<&str>,
+        output_path: &str,
+        options: &str,
+        mnt_dir: &str,
+    ) -> Self {
         Self {
             executable: executable.to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
+            args: args
+                .iter()
+                .map(|s| {
+                    println!("s: {}", s);
+                    s.to_string()
+                })
+                .collect(),
             output_path: output_path.to_string(),
+            options: options.chars().collect(),
             root_ppid: None,
             start_time: 0,
+            mnt_dir: mnt_dir.to_string(),
         }
     }
 
     fn process_log(&self) -> Result<(), AppError> {
-        let mnt_dir = std::env::var("MNT_DIR").expect("ERROR: MNT_DIR not set");
-        let log_file =
-            File::open(format!("{}/tracer.log", mnt_dir)).expect("ERROR: Could not open log file");
+        let log_file = File::open(format!("{}/tracer.log", self.mnt_dir))
+            .expect("ERROR: Could not open log file");
 
         let res = self.parse_lines(
             BufReader::new(log_file)
@@ -58,10 +73,10 @@ impl Command {
 
         let mut filtered_results: Vec<LogEntry> = Vec::new();
         let mut queue = VecDeque::from(res);
-        let mut queue_size = queue.len();
+        let mut prev_queue_size = 0;
 
-        while queue_size == queue.len() {
-            queue_size = queue.len();
+        while prev_queue_size != queue.len() {
+            prev_queue_size = queue.len();
             let mut backup_queue = VecDeque::new();
 
             while let Some(result) = queue.pop_front() {
@@ -85,7 +100,8 @@ impl Command {
         filtered_results.sort_by(|a, b| a.order.cmp(&b.order));
         let mut file = File::create(format!("{}", self.output_path))?;
         for result in filtered_results {
-            writeln!(&mut file, "{}|{}", result.op, result.path)?;
+            let result_path = result.path.replace("/usr/src/dockermount", &self.mnt_dir);
+            writeln!(&mut file, "{}|{}", result.op, result_path)?;
         }
 
         Ok(())
@@ -121,7 +137,7 @@ impl Command {
                     None
                 }
             })
-            .filter(|l| l.is_some())
+            .filter(|l| l.is_some() && self.options.contains(&l.as_ref().unwrap().op))
             .map(|l| l.unwrap())
             .collect()
     }

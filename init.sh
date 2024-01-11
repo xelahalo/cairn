@@ -1,7 +1,7 @@
 #!/bin/bash
 
 usage() {
-	echo "Usage: $0 [-hb]" 1>&2
+	echo "Usage: $0 [-hb] <mnt-dir>" 1>&2
 	echo "  -h: Display this help message" 1>&2
   echo "  -b: Also build and run the benchmarking container" 1>&2
 	exit 1
@@ -28,16 +28,20 @@ done
 
 shift $((OPTIND - 1))
 
-source ".env"
-if [ -z "$MNT_DIR" ]; then
-    echo "MNT_DIR is not set in the env file."
-    exit 1
+MNT_DIR=$1
+if [ -z "$MNT_DIR" ] || [[ "$MNT_DIR" != /* ]] ; then
+    echo "Mount directory is required, needs to be a full path" 1>&2
+    usage
 fi
 
 if ! docker info >/dev/null 2>&1; then
 	echo "Docker is not running. Quitting."
 	exit 1
 fi
+
+SCRIPT_PATH=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+cd "$SCRIPT_PATH" || exit
 
 if [ "$BENCHMARK" = true ]; then 
   echo "Building and running benchmarking container"
@@ -46,20 +50,22 @@ if [ "$BENCHMARK" = true ]; then
     --rm \
     --detach \
     --privileged \
-    --mount type=bind,source="$(pwd)/$MNT_DIR",target=/usr/src/dockermount,bind-propagation=slave \
+    --mount type=bind,source="${MNT_DIR}",target=/usr/src/dockermount,bind-propagation=rshared \
     --cap-add SYS_ADMIN \
     --name "build-env-bench" \
     -it "build-env:bench" 
 fi
 
-docker build -t "build-env:test" .
+docker build -t "build-env:test" -f "${SCRIPT_PATH}/Dockerfile" .
 docker run \
 	--rm \
   --detach \
 	--privileged \
-	-v "$(pwd)/$MNT_DIR":/usr/src/dockermount \
+	-v "${MNT_DIR}":/usr/src/dockermount \
 	--cap-add SYS_ADMIN \
 	--name "build-env" \
 	-it "build-env:test" 
 
 #	--mount type=bind,source="$(pwd)/$MNT_DIR",target=/usr/src/dockermount,bind-propagation=slave \
+
+cd - || exit

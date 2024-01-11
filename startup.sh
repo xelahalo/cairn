@@ -1,6 +1,6 @@
 #!/bin/bash
 
- start the tracer
+# start the tracer
 cairn-fuse /usr/src/dockermount /usr/src/fusemount > app.log 2>&1 &
 
 echo "$!"

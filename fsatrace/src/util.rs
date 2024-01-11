@@ -10,13 +10,14 @@ pub fn stream_output(output: &mut Child) -> Result<String, AppError> {
             io::ErrorKind::BrokenPipe,
         )))?;
     let stdout_reader = BufReader::new(stdout);
-    let stdout_lines = stdout_reader.lines();
+    let mut stdout_lines = stdout_reader.lines().peekable();
 
     let mut result = String::new();
-    for line in stdout_lines {
-        let l = line?;
-        println!("{:?}", &l);
-        result.push_str(&l);
+    while let Some(Ok(line)) = stdout_lines.next() {
+        if stdout_lines.peek().is_some() {
+            println!("{:?}", &line);
+        }
+        result += &line;
         result.push('\n');
     }
 

@@ -33,6 +33,11 @@ enum FileKind {
     File,
     Directory,
     Symlink,
+    Socket,
+    CharDevice,
+    BlockDevice,
+    NamedPipe,
+    Unknown,
 }
 
 enum Reply {
@@ -52,6 +57,14 @@ impl From<FileKind> for fuser::FileType {
             FileKind::File => fuser::FileType::RegularFile,
             FileKind::Directory => fuser::FileType::Directory,
             FileKind::Symlink => fuser::FileType::Symlink,
+            FileKind::Socket => fuser::FileType::Socket,
+            FileKind::CharDevice => fuser::FileType::CharDevice,
+            FileKind::BlockDevice => fuser::FileType::BlockDevice,
+            FileKind::NamedPipe => fuser::FileType::NamedPipe,
+            FileKind::Unknown => {
+                warn!("Unknown file type");
+                fuser::FileType::RegularFile
+            }
         }
     }
 }
@@ -1149,19 +1162,23 @@ fn as_file_kind(mut mode: u32) -> FileKind {
         return FileKind::Symlink;
     } else if mode == libc::S_IFDIR as u32 {
         return FileKind::Directory;
+    } else if mode == libc::S_IFCHR as u32 {
+        return FileKind::CharDevice;
+    } else if mode == libc::S_IFBLK as u32 {
+        return FileKind::BlockDevice;
+    } else if mode == libc::S_IFSOCK as u32 {
+        return FileKind::Socket;
+    } else if mode == libc::S_IFIFO as u32 {
+        return FileKind::NamedPipe;
     } else {
-        unimplemented!("{}", mode);
+        warn!("as_file_kind() does not support mode {:o}", mode);
+        return FileKind::Unknown;
     }
 }
 
 fn create_new(path: &str) -> io::Result<File> {
-    let mut c = false;
-    if Path::new(&path).exists() {
-        c = true;
-    }
-
     return OpenOptions::new()
-        .create(c)
+        .create(true)
         .write(true)
         .append(true)
         .open(path);
