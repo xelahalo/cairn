@@ -3,7 +3,6 @@ benchmarks/
 examples/
 LICENSE
 README.md
-libfuse_examples/
 research/
 target/
 venv/

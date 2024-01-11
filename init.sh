@@ -50,7 +50,7 @@ if [ "$BENCHMARK" = true ]; then
     --rm \
     --detach \
     --privileged \
-    --mount type=bind,source="${MNT_DIR}",target=/usr/src/dockermount,bind-propagation=rshared \
+	  -v "${MNT_DIR}":/usr/src/dockermount \
     --cap-add SYS_ADMIN \
     --name "build-env-bench" \
     -it "build-env:bench" 

@@ -13,6 +13,7 @@ done
 # mount relevant dirs
 for f in proc sys dev bin etc lib lib32 lib64 libx32 usr/lib usr/lib32 usr/lib64 usr/libx32 usr/include; do
     mkdir -p /usr/src/fusemount/$f
+    chmod -R u=rwx /usr/src/fusemount/$f
     mount --bind /$f /usr/src/fusemount/$f
 done
 
