@@ -1,6 +1,6 @@
 #!/bin/sh
 
-cd rattle
+cd rattle || exit
 cabal update
 cabal install --overwrite-policy=always
 
