@@ -34,6 +34,8 @@ if [ -z "$MNT_DIR" ] || [[ "$MNT_DIR" != /* ]] ; then
     usage
 fi
 
+echo "Mounting directory: $MNT_DIR"
+
 if ! docker info >/dev/null 2>&1; then
 	echo "Docker is not running. Quitting."
 	exit 1

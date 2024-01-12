@@ -6,5 +6,5 @@ cabal install --overwrite-policy=always
 
 script_dir="$(pwd)/../"
 
-"$HOME"/.local/bin/rattle-benchmark fsatrace redis micro --script-dir "$script_dir"
+"$HOME"/.cabal/bin/rattle-benchmark fsatrace redis micro --script-dir "$script_dir"
 

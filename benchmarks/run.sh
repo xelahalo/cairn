@@ -90,7 +90,7 @@ for d in benchmarks/commands/*; do
       # STEP 3: Benchmark it in docker on top of FUSE
       # Make it run in a different container instead of trying to make it run alongside the current fuse layer
       docker exec build-env-bench mkdir -p /workdir
-      docker exec build-env-bench /bin/bash -c "cp -r /usr/src/dockermount/workdir/. /workdir/"
+      docker exec build-env-bench /bin/bash -c "cp -r -n /usr/src/dockermount/. /workdir/"
       docker exec build-env-bench /bin/bash -c "cd /usr/src/app/mnt/workdir && chmod +x run.sh && \
         if [ \"$EXECUTABLE\" = \"stress\" ]; then \
           hyperfine --warmup 3 --parameter-scan iter $START $END -D $RANGE './run.sh {iter}' --export-json fuse_docker_$BENCHMARK_NAME.json; \
@@ -108,7 +108,7 @@ for d in benchmarks/commands/*; do
 			if [ "$EXECUTABLE" = "stress" ]; then
         hyperfine --warmup 3 --parameter-scan iter "$START" "$END" -D "$RANGE" 'fsatrace rwmdtq tracer.log -- ./run.sh {iter}' --export-json cairn_$BENCHMARK_NAME.json
       else
-      	hyperfine --warmup 3 'fsatrace rwmdtq ./run.sh' --export-json cairn_$BENCHMARK_NAME.json
+      	hyperfine --warmup 3 'fsatrace rwmdtq tracer.log -- ./run.sh' --export-json cairn_$BENCHMARK_NAME.json
       fi
 
 			cd - || exit
@@ -117,9 +117,7 @@ for d in benchmarks/commands/*; do
       echo "Copying results..."
       echo "-----------------------------------------"
 
-			# move the json to the benchmark directory
 			mkdir -p benchmarks/results/$EXECUTABLE/$(basename $f)
-			# copy over all the files that were used to make the benchmarks
 			find host_mnt -mindepth 1 -maxdepth 1 \
 			! -name bin ! -name dev ! -name etc ! -name 'lib*' ! -name proc ! -name sys ! -name usr ! -name tracer.log \
         -exec cp -r {} benchmarks/results/$EXECUTABLE/$(basename $f) \;
@@ -128,7 +126,6 @@ for d in benchmarks/commands/*; do
       echo "Cleaning up..."
       echo "-----------------------------------------"
 
-			# clean up dir
 			find host_mnt -mindepth 1 -maxdepth 1 \
         ! -name bin ! -name dev ! -name etc ! -name 'lib*' ! -name proc ! -name sys ! -name usr ! -name tracer.log \
         -exec rm -r {} +
