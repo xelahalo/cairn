@@ -45,7 +45,7 @@ for d in benchmarks/commands/*; do
       echo "-----------------------------------------"
 
 			# copy the benchmark test to the workdir
-			rsync -av $f/ host_mnt/
+      cp -r $f/. host_mnt/
 
 			if [ "$EXECUTABLE" = "stress" ]; then
         cp $d/gcc host_mnt/
@@ -56,6 +56,10 @@ for d in benchmarks/commands/*; do
 			cd host_mnt || exit
 			chmod +x run.sh
 
+      echo "-----------------------------------------"
+      echo "Benchmarking locally..."
+      echo "-----------------------------------------"
+
 			# STEP 1: Benchmark it locally
 			if [ "$EXECUTABLE" = "stress" ]; then
         hyperfine --warmup 3 --parameter-scan iter "$START" "$END" -D "$RANGE" './run.sh {iter}' --export-json local_$BENCHMARK_NAME.json
@@ -63,9 +67,13 @@ for d in benchmarks/commands/*; do
       	hyperfine --warmup 3 './run.sh' --export-json local_$BENCHMARK_NAME.json
       fi 
 
+      echo "-----------------------------------------"
+      echo "Benchmarking in Docker..."
+      echo "-----------------------------------------"
+
 			# STEP 2: Benchmark it in docker
       docker exec build-env mkdir -p /usr/src/benchmark/
-      docker exec build-env rsync -av /usr/src/dockermount/ /usr/src/benchmark/
+      docker exec build-env cp -r /usr/src/dockermount/. /usr/src/benchmark/
       docker exec build-env /bin/bash -c "cd /usr/src/benchmark && chmod +x run.sh && \
       if [ \"$EXECUTABLE\" = \"stress\" ]; then \
         hyperfine --warmup 3 --parameter-scan iter $START $END -D $RANGE './run.sh {iter}' --export-json docker_$BENCHMARK_NAME.json; \
@@ -75,10 +83,14 @@ for d in benchmarks/commands/*; do
       docker exec build-env cp /usr/src/benchmark/docker_$BENCHMARK_NAME.json /usr/src/dockermount/
       docker exec build-env find /usr/src/benchmark -delete
 
+      echo "-----------------------------------------"
+      echo "Benchmarking in Docker on FUSE..."
+      echo "-----------------------------------------"
+
       # STEP 3: Benchmark it in docker on top of FUSE
       # Make it run in a different container instead of trying to make it run alongside the current fuse layer
       docker exec build-env-bench mkdir -p /workdir
-      docker exec build-env-bench /bin/bash -c "rsync -av /usr/src/dockermount/workdir/ /workdir/"
+      docker exec build-env-bench /bin/bash -c "cp -r /usr/src/dockermount/workdir/. /workdir/"
       docker exec build-env-bench /bin/bash -c "cd /usr/src/app/mnt/workdir && chmod +x run.sh && \
         if [ \"$EXECUTABLE\" = \"stress\" ]; then \
           hyperfine --warmup 3 --parameter-scan iter $START $END -D $RANGE './run.sh {iter}' --export-json fuse_docker_$BENCHMARK_NAME.json; \
@@ -88,6 +100,9 @@ for d in benchmarks/commands/*; do
       docker exec build-env-bench cp /workdir/fuse_docker_$BENCHMARK_NAME.json /usr/src/dockermount/workdir/ 
       docker exec build-env-bench find /workdir -delete 
 
+      echo "-----------------------------------------"
+      echo "Benchmarking with Cairn..."
+      echo "-----------------------------------------"
 
 			# STEP 4: Benchmark it using Cairn
 			if [ "$EXECUTABLE" = "stress" ]; then
@@ -98,12 +113,20 @@ for d in benchmarks/commands/*; do
 
 			cd - || exit
 
+      echo "-----------------------------------------"
+      echo "Copying results..."
+      echo "-----------------------------------------"
+
 			# move the json to the benchmark directory
 			mkdir -p benchmarks/results/$EXECUTABLE/$(basename $f)
 			# copy over all the files that were used to make the benchmarks
 			find host_mnt -mindepth 1 -maxdepth 1 \
 			! -name bin ! -name dev ! -name etc ! -name 'lib*' ! -name proc ! -name sys ! -name usr ! -name tracer.log \
         -exec cp -r {} benchmarks/results/$EXECUTABLE/$(basename $f) \;
+
+      echo "-----------------------------------------"
+      echo "Cleaning up..."
+      echo "-----------------------------------------"
 
 			# clean up dir
 			find host_mnt -mindepth 1 -maxdepth 1 \
