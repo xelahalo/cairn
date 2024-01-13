@@ -1,3 +1,3 @@
-#!/bin/sh
+#!/bin/bash
 
 docker container stop build-env

@@ -41,6 +41,8 @@ if [ ! -d "$chroot_dir" ]; then
   exit 1
 fi
 
+# chroot "${chroot_dir}" /bin/bash -c "ls"
+
 (chroot "${chroot_dir}" /bin/bash -c "${cmd_args[*]}" ) &
 
 pid=$!

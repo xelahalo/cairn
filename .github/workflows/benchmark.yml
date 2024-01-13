@@ -12,7 +12,9 @@ jobs:
     steps:
     - name: Tear down the previous docker container
       id: docker-status
-      run: bash teardown.sh || true
+      run: |
+        bash teardown.sh || true
+        rm /usr/local/bin/fsatrace || true
 
     - name: Check out code
       uses: actions/checkout@v2
@@ -25,17 +27,17 @@ jobs:
     - name: Build and install the client
       run: cargo install --path ./fsatrace
 
-    - name: Start the docker containers
-      run: bash init.sh -b $(pwd)/host_mnt
-
-    - name: Install pip dependencies in venv
-      run: python3 -m venv venv && source venv/bin/activate && pip install -r benchmarks/requirements.txt
-
-    - name: Run the benchmarks
-      run: bash benchmarks/run.sh -s 1 -e 5 -r 1
-
-    - name: Stop the docker containers
-      run: bash teardown.sh
+    # - name: Start the docker containers
+    #   run: bash init.sh -b $(pwd)/host_mnt
+    #
+    # - name: Install pip dependencies in venv
+    #   run: python3 -m venv venv && source venv/bin/activate && pip install -r benchmarks/requirements.txt
+    #
+    # - name: Run the benchmarks
+    #   run: bash benchmarks/run.sh -s 1 -e 5 -r 1
+    #
+    # - name: Stop the docker containers
+    #   run: bash teardown.sh
 
     - name: Clone rattle repo
       run: |
@@ -48,8 +50,25 @@ jobs:
         ghc-version: 9.8.1
         cabal-version: 3.10.1.0
 
-    - name: Run benchmarks with rattle
-      run: bash benchmarks/rattle-benchmark.sh
+    - name: Run rattle benchmarks (cairn)
+      run: |
+        bash benchmarks/rattle-benchmark.sh
+        mv rattle/vsmake.log rattle/vsmake-cairn.log
+
+    - name: Build fsatrace
+      run: |
+        cargo uninstall fsatrace
+        mkdir -p fsatrace-original
+        git clone https://github.com/xelahalo/fsatrace.git ./fsatrace-original
+        cd fsatrace-original || exit 1
+        make
+        ln -s $(pwd)/fsatrace /usr/local/bin/fsatrace
+        cd - || exit 1
+
+    - name: Run rattle benchmarks (fsatrace)
+      run: |
+        bash benchmarks/rattle-benchmark.sh
+        mv rattle/vsmake.log rattle/vsmake-fsatrace.log
 
     - name: Publish benchmark results
       if: success()
@@ -58,4 +77,5 @@ jobs:
         name: ${{ github.sha }} 
         path: |
           benchmarks/*.zip
-          rattle/vsmake.log
+          rattle/vsmake-cairn.log
+          rattle/vsmake-fsatrace.log

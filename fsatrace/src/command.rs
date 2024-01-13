@@ -44,7 +44,6 @@ impl Command {
             args: args
                 .iter()
                 .map(|s| {
-                    println!("s: {}", s);
                     s.to_string()
                 })
                 .collect(),

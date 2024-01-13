@@ -51,6 +51,7 @@ if [ "$BENCHMARK" = true ]; then
   docker run \
     --rm \
     --detach \
+    --privileged \
     --mount type=bind,source="${MNT_DIR}",target=/usr/src/dockermount,bind-propagation=rshared \
     --cap-add SYS_ADMIN \
     --name "build-env-bench" \
@@ -61,6 +62,7 @@ docker build -t "build-env:test" -f "${SCRIPT_PATH}/Dockerfile" .
 docker run \
 	--rm \
   --detach \
+  --privileged \
   --mount type=bind,source="${MNT_DIR}",target=/usr/src/dockermount,bind-propagation=rshared \
 	--cap-add SYS_ADMIN \
 	--name "build-env" \
