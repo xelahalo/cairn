@@ -17,10 +17,6 @@ for f in proc sys dev bin etc lib lib32 lib64 libx32 usr/lib usr/lib32 usr/lib64
     mount --bind /$f /usr/src/fusemount/$f
 done
 
-simple-fs --mount-point /usr/src/simplemount > simple.log 2>&1 &
-
-echo "$!"
-
 /bin/bash
 
 # TODO: handle SIGTERM, SIGKILL, SIGINT to gracefully unmount

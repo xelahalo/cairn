@@ -29,7 +29,7 @@ def count_dirs(dir_path):
 
 # read the first command argument
 result_dir = sys.argv[1]
-names = ['local', 'docker', 'fuse_ll_docker', 'fuse_docker', 'fuse_rs_docker', 'fuse_cairn_docker', 'cairn']
+names = ['local', 'docker', 'fuse_ll_docker', 'fuse_docker', 'fuse_cairn_docker_exec', 'fuse_cairn_docker', 'cairn']
 colors = ['green', 'blue', 'yellow', 'orange', 'pink', 'cyan','red']
 
 for i in range(1, count_dirs(result_dir) + 1):

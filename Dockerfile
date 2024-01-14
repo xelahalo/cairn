@@ -1,7 +1,7 @@
 FROM rust:1.73-bookworm
 WORKDIR /usr/src/app
 
-RUN mkdir /usr/src/fusemount /usr/src/dockermount /usr/src/simplemount
+RUN mkdir /usr/src/fusemount /usr/src/dockermount 
 
 RUN apt update && \
     # hyperfine is only needed for benchmarking
@@ -16,7 +16,6 @@ RUN apt update && \
 # cairn-fuse
 COPY . .
 RUN cargo install --path ./cairn-fuse
-RUN cargo install --path ./simple-fs
 RUN chmod +x /usr/src/app/startup.sh
 
 CMD ["/usr/src/app/startup.sh"]
