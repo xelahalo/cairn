@@ -119,9 +119,9 @@ for d in benchmarks/commands/*; do
       echo "Benchmarking in Docker on FUSE(III)..."
       echo "-----------------------------------------"
 
-      # STEP 4: Benchmark it in docker on top of FUSE (most optimal implementation)
+      # STEP 5: Benchmark it in docker on top of FUSE (simple.rs implementation)
       docker exec build-env /bin/bash -c "cp -r -n /usr/src/dockermount/. /usr/src/simplemount"
-      docker exec build-env /bin/bash -c "cd /usr/src/app/simplemount && chmod +x run.sh && \
+      docker exec build-env /bin/bash -c "cd /usr/src/simplemount && chmod +x run.sh && \
         if [ \"$EXECUTABLE\" = \"stress\" ]; then \
           hyperfine --warmup 3 --parameter-scan iter $START $END -D $RANGE './run.sh {iter}' --export-json fuse_rs_docker_$BENCHMARK_NAME.json; \
         else \
@@ -129,6 +129,18 @@ for d in benchmarks/commands/*; do
         fi"
       docker exec build-env cp /usr/src/simplemount/fuse_rs_docker_$BENCHMARK_NAME.json /usr/src/dockermount/ 
       docker exec build-env rm -rf -- /usr/src/simplemount/*
+
+      echo "-----------------------------------------"
+      echo "Benchmarking in Docker on FUSE(IV)..."
+      echo "-----------------------------------------"
+
+      # STEP 6: Benchmark it in docker on top of FUSE (cairn without client)
+      docker exec build-env /bin/bash -c "cd /usr/src/fusemount && chmod +x run.sh && \
+        if [ \"$EXECUTABLE\" = \"stress\" ]; then \
+          hyperfine --warmup 3 --parameter-scan iter $START $END -D $RANGE './run.sh {iter}' --export-json fuse_cairn_docker_$BENCHMARK_NAME.json; \
+        else \
+          hyperfine --warmup 3 './run.sh' --export-json fuse_cairn_docker_$BENCHMARK_NAME.json; \
+        fi"
 
       echo "-----------------------------------------"
       echo "Benchmarking with Cairn..."
