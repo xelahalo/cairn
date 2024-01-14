@@ -27,17 +27,17 @@ jobs:
     - name: Build and install the client
       run: cargo install --path ./fsatrace
 
-    # - name: Start the docker containers
-    #   run: bash init.sh -b $(pwd)/host_mnt
-    #
-    # - name: Install pip dependencies in venv
-    #   run: python3 -m venv venv && source venv/bin/activate && pip install -r benchmarks/requirements.txt
-    #
-    # - name: Run the benchmarks
-    #   run: bash benchmarks/run.sh -s 1 -e 5 -r 1
-    #
-    # - name: Stop the docker containers
-    #   run: bash teardown.sh
+    - name: Start the docker containers
+      run: bash init.sh -b $(pwd)/host_mnt
+
+    - name: Install pip dependencies in venv
+      run: python3 -m venv venv && source venv/bin/activate && pip install -r benchmarks/requirements.txt
+
+    - name: Run the benchmarks
+      run: bash benchmarks/run.sh -s 1 -e 5 -r 1
+
+    - name: Stop the docker containers
+      run: bash teardown.sh
 
     - name: Clone rattle repo
       run: |

@@ -42,10 +42,10 @@ fn main() -> Result<(), AppError> {
         )
         .get_matches();
 
-    println!(
-        "Executing command: {:?}",
-        std::env::args().collect::<Vec<_>>()
-    );
+    // println!(
+    //     "Executing command: {:?}",
+    //     std::env::args().collect::<Vec<_>>()
+    // );
 
     let mut options = String::new();
     if let Some(opts) = matches.get_one::<String>("options") {

@@ -97,7 +97,7 @@ for d in benchmarks/commands/*; do
         else \
           hyperfine --warmup 3 './run.sh' --export-json fuse_docker_$BENCHMARK_NAME.json; \
         fi"
-      docker exec build-env-bench cp /workdir/fuse_docker_$BENCHMARK_NAME.json /usr/src/dockermount/workdir/ 
+      docker exec build-env-bench cp /workdir/fuse_docker_$BENCHMARK_NAME.json /usr/src/dockermount/ 
       docker exec build-env-bench find /workdir -delete 
 
       echo "-----------------------------------------"
@@ -106,9 +106,9 @@ for d in benchmarks/commands/*; do
 
 			# STEP 4: Benchmark it using Cairn
 			if [ "$EXECUTABLE" = "stress" ]; then
-        hyperfine --warmup 3 --parameter-scan iter "$START" "$END" -D "$RANGE" 'fsatrace rwmdtq tracer.log -- ./run.sh {iter}' --export-json cairn_$BENCHMARK_NAME.json
+        hyperfine --warmup 3 --parameter-scan iter "$START" "$END" -D "$RANGE" 'fsatrace rwmdtq cairn-fsatrace.log -- ./run.sh {iter}' --export-json cairn_$BENCHMARK_NAME.json --show-output
       else
-      	hyperfine --warmup 3 'fsatrace rwmdtq tracer.log -- ./run.sh' --export-json cairn_$BENCHMARK_NAME.json
+      	hyperfine --warmup 3 'fsatrace rwmdtq cairn-fsatrace.log -- ./run.sh' --export-json cairn_$BENCHMARK_NAME.json --show-output
       fi
 
 			cd - || exit

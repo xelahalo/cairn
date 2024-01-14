@@ -27,6 +27,7 @@ use std::{env, fs, io};
 use walkdir::WalkDir;
 
 const FMODE_EXEC: i32 = 0x20;
+const TTL: u64 = 0;
 
 #[derive(Copy, Clone, PartialEq)]
 enum FileKind {
@@ -268,10 +269,10 @@ impl TracerFS {
                     self.attrs.insert(ino, new_attrs.clone());
                     match reply {
                         Reply::Entry(reply) => {
-                            reply.entry(&Duration::new(0, 0), &new_attrs.into(), 0);
+                            reply.entry(&Duration::new(TTL, 0), &new_attrs.into(), 0);
                         }
                         Reply::Attr(reply) => {
-                            reply.attr(&Duration::new(0, 0), &new_attrs.into());
+                            reply.attr(&Duration::new(TTL, 0), &new_attrs.into());
                         }
                         Reply::Empty(reply) => {
                             reply.ok();
@@ -323,7 +324,7 @@ impl Filesystem for TracerFS {
         match self.lookup_name(parent, name) {
             Ok(attrs) => {
                 self.attrs.insert(attrs.ino, attrs.clone());
-                reply.entry(&Duration::new(0, 0), &attrs.into(), 0);
+                reply.entry(&Duration::new(TTL, 0), &attrs.into(), 0);
             }
             Err(e) => {
                 reply.error(e);
@@ -340,7 +341,7 @@ impl Filesystem for TracerFS {
 
         match self.attrs.get(&ino) {
             Some(attrs) => {
-                reply.attr(&Duration::new(0, 0), &(*attrs).clone().into());
+                reply.attr(&Duration::new(TTL, 0), &(*attrs).clone().into());
             }
             None => {
                 reply.error(libc::ENOENT);
@@ -1235,7 +1236,7 @@ fn main() {
         // .arg(Arg::new("v").short('v').help("Sets the level of verbosity"))
         .get_matches();
 
-    let level_filter = LevelFilter::Trace;
+    let level_filter = LevelFilter::Info;
     let root = matches.get_one::<String>("root").unwrap().to_string();
     let mountpoint = matches.get_one::<String>("mount-point").unwrap();
     let target = Box::new(create_new(format!("{root}/tracer.log").as_str()).unwrap());
