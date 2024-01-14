@@ -41,12 +41,7 @@ impl Command {
     ) -> Self {
         Self {
             executable: executable.to_string(),
-            args: args
-                .iter()
-                .map(|s| {
-                    s.to_string()
-                })
-                .collect(),
+            args: args.iter().map(|s| s.to_string()).collect(),
             output_path: output_path.to_string(),
             options: options.chars().collect(),
             root_ppid: None,
@@ -163,7 +158,9 @@ impl MutCommand for Command {
             }
         }
 
-        self.process_log()?;
+        if !self.output_path.is_empty() {
+            self.process_log()?;
+        }
 
         Ok(())
     }

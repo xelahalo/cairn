@@ -18,14 +18,17 @@ fn main() -> Result<(), AppError> {
         .author("xelahalo <xelahalo@gmail.com>")
         .version(crate_version!())
         .about("Tracing tool for forward build systems.")
-        .arg(Arg::new("options").help(
-            "Characters to filter which operations to dump; a combination of r, w, m ,d, q, t",
-        ).num_args(1).required(true))
+        .arg(
+            Arg::new("options")
+                .help("Characters to filter which operations to dump; a combination of r, w, m ,d, q, t", )
+                .num_args(1)
+                //.required(true)
+        )
         .arg(
             Arg::new("output")
                 .help("Output file to write to")
                 .num_args(1)
-                .required(true),
+                // .required(true),
         )
         // .arg(
         //     Arg::new("--")

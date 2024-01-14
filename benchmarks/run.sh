@@ -84,11 +84,10 @@ for d in benchmarks/commands/*; do
       docker exec build-env find /usr/src/benchmark -delete
 
       echo "-----------------------------------------"
-      echo "Benchmarking in Docker on FUSE..."
+      echo "Benchmarking in Docker on FUSE(I)..."
       echo "-----------------------------------------"
 
-      # STEP 3: Benchmark it in docker on top of FUSE
-      # Make it run in a different container instead of trying to make it run alongside the current fuse layer
+      # STEP 3: Benchmark it in docker on top of FUSE (bad implementation)
       docker exec build-env-bench mkdir -p /workdir
       docker exec build-env-bench /bin/bash -c "cp -r -n /usr/src/dockermount/. /workdir/"
       docker exec build-env-bench /bin/bash -c "cd /usr/src/app/mnt/workdir && chmod +x run.sh && \
@@ -101,14 +100,30 @@ for d in benchmarks/commands/*; do
       docker exec build-env-bench find /workdir -delete 
 
       echo "-----------------------------------------"
+      echo "Benchmarking in Docker on FUSE(II)..."
+      echo "-----------------------------------------"
+
+      # STEP 4: Benchmark it in docker on top of FUSE (most optimal implementation)
+      docker exec build-env-bench mkdir -p /workdir
+      docker exec build-env-bench /bin/bash -c "cp -r -n /usr/src/dockermount/. /workdir/"
+      docker exec build-env-bench /bin/bash -c "cd /usr/src/app/mnt_ll/workdir && chmod +x run.sh && \
+        if [ \"$EXECUTABLE\" = \"stress\" ]; then \
+          hyperfine --warmup 3 --parameter-scan iter $START $END -D $RANGE './run.sh {iter}' --export-json fuse_ll_docker_$BENCHMARK_NAME.json; \
+        else \
+          hyperfine --warmup 3 './run.sh' --export-json fuse_ll_docker_$BENCHMARK_NAME.json; \
+        fi"
+      docker exec build-env-bench cp /workdir/fuse_ll_docker_$BENCHMARK_NAME.json /usr/src/dockermount/ 
+      docker exec build-env-bench find /workdir -delete 
+
+      echo "-----------------------------------------"
       echo "Benchmarking with Cairn..."
       echo "-----------------------------------------"
 
 			# STEP 4: Benchmark it using Cairn
 			if [ "$EXECUTABLE" = "stress" ]; then
-        hyperfine --warmup 3 --parameter-scan iter "$START" "$END" -D "$RANGE" 'fsatrace rwmdtq cairn-fsatrace.log -- ./run.sh {iter}' --export-json cairn_$BENCHMARK_NAME.json --show-output
+        hyperfine --warmup 3 --parameter-scan iter "$START" "$END" -D "$RANGE" 'fsatrace -- ./run.sh {iter}' --export-json cairn_$BENCHMARK_NAME.json 
       else
-      	hyperfine --warmup 3 'fsatrace rwmdtq cairn-fsatrace.log -- ./run.sh' --export-json cairn_$BENCHMARK_NAME.json --show-output
+      	hyperfine --warmup 3 'fsatrace -- ./run.sh' --export-json cairn_$BENCHMARK_NAME.json
       fi
 
 			cd - || exit
