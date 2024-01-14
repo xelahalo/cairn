@@ -2,6 +2,7 @@
 members = [
     "fsatrace",
     "cairn-fuse",
+    "simple-fs"
 ]
 resolver = "2"
 

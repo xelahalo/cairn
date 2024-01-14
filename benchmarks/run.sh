@@ -116,6 +116,21 @@ for d in benchmarks/commands/*; do
       docker exec build-env-bench find /workdir -delete 
 
       echo "-----------------------------------------"
+      echo "Benchmarking in Docker on FUSE(III)..."
+      echo "-----------------------------------------"
+
+      # STEP 4: Benchmark it in docker on top of FUSE (most optimal implementation)
+      docker exec build-env /bin/bash -c "cp -r -n /usr/src/dockermount/. /usr/src/simplemount"
+      docker exec build-env /bin/bash -c "cd /usr/src/app/simplemount && chmod +x run.sh && \
+        if [ \"$EXECUTABLE\" = \"stress\" ]; then \
+          hyperfine --warmup 3 --parameter-scan iter $START $END -D $RANGE './run.sh {iter}' --export-json fuse_rs_docker_$BENCHMARK_NAME.json; \
+        else \
+          hyperfine --warmup 3 './run.sh' --export-json fuse_rs_docker_$BENCHMARK_NAME.json; \
+        fi"
+      docker exec build-env cp /usr/src/simplemount/fuse_rs_docker_$BENCHMARK_NAME.json /usr/src/dockermount/ 
+      docker exec build-env rm -rf -- /usr/src/simplemount/*
+
+      echo "-----------------------------------------"
       echo "Benchmarking with Cairn..."
       echo "-----------------------------------------"
 
