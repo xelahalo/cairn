@@ -51,15 +51,9 @@ impl Command {
     }
 
     fn process_log(&self) -> Result<(), AppError> {
-        let log_file = File::open(format!("{}/tracer.log", self.mnt_dir))
-            .expect("ERROR: Could not open log file");
+        let log_file = File::open(format!("{}/tracer.log", self.mnt_dir))?;
 
-        let res = self.parse_lines(
-            BufReader::new(log_file)
-                .lines()
-                .map(|l| l.unwrap())
-                .collect::<Vec<String>>(),
-        );
+        let res = self.parse_lines(BufReader::new(log_file).lines().map(|l| l.unwrap()));
 
         let root_ppid = self.root_ppid.unwrap();
         let mut ppids = HashSet::new();
@@ -95,13 +89,13 @@ impl Command {
         let mut file = File::create(format!("{}", self.output_path))?;
         for result in filtered_results {
             let result_path = result.path.replace("/usr/src/dockermount", &self.mnt_dir);
-            writeln!(&mut file, "{}|{}", result.op, result_path)?;
+            file.write_all(format!("{}|{}\n", result.op, result_path).as_bytes())?;
         }
 
         Ok(())
     }
 
-    fn parse_lines(&self, lines: Vec<String>) -> Vec<LogEntry> {
+    fn parse_lines(&self, lines: impl Iterator<Item = String>) -> Vec<LogEntry> {
         let regex_str = r"^\[INFO\] -> (\d+): (\d+)\|(\d+)\|([a-z])\|(.*)$";
         let regex = Regex::new(regex_str).unwrap();
 
@@ -150,7 +144,7 @@ impl MutCommand for Command {
 
         let output = stream_output(&mut child)?;
 
-        if let Some(last_line) = output.lines().collect::<Vec<&str>>().last() {
+        if let Some(last_line) = output.lines().last() {
             if let Ok(pid) = last_line.parse::<u32>() {
                 self.root_ppid = Some(pid);
             } else {

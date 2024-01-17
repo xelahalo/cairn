@@ -135,7 +135,7 @@ for d in benchmarks/commands/*; do
 			if [ "$EXECUTABLE" = "stress" ]; then
         hyperfine --warmup 3 --parameter-scan iter "$START" "$END" -D "$RANGE" 'docker exec build-env /bin/bash -c "cd /usr/src/fusemount && chmod +x run.sh && ./run.sh {iter}"' --export-json fuse_cairn_docker_exec_$BENCHMARK_NAME.json 
       else
-        hyperfine --warmup 3 'docker exec build-env /bin/bash -c "cd /usr/src/fusemount && chmod +x run.sh && ./run.sh {iter}"' --export-json fuse_cairn_docker_exec_$BENCHMARK_NAME.json
+        hyperfine --warmup 3 'docker exec build-env /bin/bash -c "cd /usr/src/fusemount && chmod +x run.sh && ./run.sh {iter}"' --export-json fuse_cairn_exec_docker_$BENCHMARK_NAME.json
       fi
 
       echo "-----------------------------------------"

@@ -5,15 +5,12 @@ mod util;
 
 use crate::app::App;
 use clap::{crate_version, Arg, Command};
-use dotenv::dotenv;
 use error::AppError;
 
 const CHROOT_DIR: &str = "/usr/src/fusemount";
 const CONTAINER_NAME: &str = "build-env";
 
 fn main() -> Result<(), AppError> {
-    dotenv().ok();
-
     let matches = Command::new("Cairn")
         .author("xelahalo <xelahalo@gmail.com>")
         .version(crate_version!())
@@ -65,19 +62,20 @@ fn main() -> Result<(), AppError> {
         None => panic!("No command provided"),
     };
 
-    let cmd_result = std::process::Command::new("docker")
-        .args([
-            "inspect",
-            "build-env",
-            "--format",
-            "\"{{ (index .Mounts 0).Source}}\"",
-        ])
-        .output()
-        .expect("Not able to query containers mount dir.");
-    let mnt_dir = String::from_utf8_lossy(&cmd_result.stdout);
-    let mnt_dir_trimmed = mnt_dir.trim_matches(|c: char| c.is_whitespace() || c == '"');
+    // let cmd_result = std::process::Command::new("docker")
+    //     .args([
+    //         "inspect",
+    //         "build-env",
+    //         "--format",
+    //         "\"{{ (index .Mounts 0).Source}}\"",
+    //     ])
+    //     .output()
+    //     .expect("Not able to query containers mount dir.");
+    // let mnt_dir = String::from_utf8_lossy(&cmd_result.stdout);
+    // let mnt_dir_trimmed = mnt_dir.trim_matches(|c: char| c.is_whitespace() || c == '"');
 
     // create log file then cd into folder where we run command
+    let mnt_dir_trimmed = "/Users/xelahalo/git/personal/cairn/host_mnt";
     let cmd = command::Command::new(
         "docker",
         vec![
