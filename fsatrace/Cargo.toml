@@ -9,3 +9,4 @@ edition = "2021"
 clap = { version = "4.4", features = ["cargo"] }
 log = "0.4.20"
 regex = "1.10.2"
+env_logger = "0.10.1"

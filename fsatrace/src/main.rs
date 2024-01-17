@@ -5,7 +5,10 @@ mod util;
 
 use crate::app::App;
 use clap::{crate_version, Arg, Command};
+use env_logger::Builder;
 use error::AppError;
+use log::{LevelFilter, Record};
+use std::io;
 
 const CHROOT_DIR: &str = "/usr/src/fusemount";
 const CONTAINER_NAME: &str = "build-env";
@@ -42,6 +45,11 @@ fn main() -> Result<(), AppError> {
         )
         .get_matches();
 
+    Builder::from_default_env()
+        .format_timestamp_millis()
+        .filter_level(LevelFilter::Info)
+        .init();
+
     // println!(
     //     "Executing command: {:?}",
     //     std::env::args().collect::<Vec<_>>()
@@ -77,8 +85,9 @@ fn main() -> Result<(), AppError> {
     // create log file then cd into folder where we run command
     let mnt_dir_trimmed = "/Users/xelahalo/git/personal/cairn/host_mnt";
     let cmd = command::Command::new(
-        "docker",
+        "time",
         vec![
+            "docker",
             "exec",
             CONTAINER_NAME,
             "/bin/bash",
@@ -98,6 +107,8 @@ fn main() -> Result<(), AppError> {
         &options,
         &mnt_dir_trimmed,
     );
+
+    println!("Executing command: {:?}", cmd);
 
     let mut app = App::new(vec![Box::new(cmd)]);
 

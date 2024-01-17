@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use crate::util::stream_output;
+use log::info;
 use regex::Regex;
 use std::collections::{HashSet, VecDeque};
 use std::fs::File;
@@ -133,17 +134,22 @@ impl Command {
 
 impl MutCommand for Command {
     fn execute(&mut self) -> Result<(), AppError> {
+        info!("start");
         self.start_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as u32;
 
+        info!("before command");
+        info!("command: {:?} {:?}", self.executable, self.args);
         let mut child = std::process::Command::new(&self.executable)
             .args(&self.args)
             .stdout(std::process::Stdio::piped())
             .spawn()?;
 
+        info!("before stream");
         let output = stream_output(&mut child)?;
 
+        info!("before parse");
         if let Some(last_line) = output.lines().last() {
             if let Ok(pid) = last_line.parse::<u32>() {
                 self.root_ppid = Some(pid);
@@ -152,9 +158,19 @@ impl MutCommand for Command {
             }
         }
 
+        // info!("before second command");
+        // let mut child = std::process::Command::new(&self.executable)
+        //     .args(&self.args)
+        //     .spawn()?;
+        // child.wait()?;
+
+        info!("before log process");
+
         if !self.output_path.is_empty() {
             self.process_log()?;
         }
+
+        info!("done");
 
         Ok(())
     }
