@@ -7,7 +7,6 @@ pub enum AppError {
     CommandFailed(ExitStatus),
     IoError(Error),
     SystemTimeError(SystemTimeError),
-    EnvVarError(Error),
     Unknown,
 }
 

@@ -77,3 +77,4 @@ jobs:
         name: ${{ github.sha }} 
         path: |
           benchmarks/*.zip
+          rattle/*.log

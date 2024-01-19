@@ -35,35 +35,35 @@ if [ -z "$CAIRN_MNT_DIR" ] || [[ "$CAIRN_MNT_DIR" != /* ]] ; then
     usage
 fi
 
-echo "Setting CAIRN_MNT_DIR in your shell..."
-user_shell=$(basename "$SHELL")
-
-config_file=""
-case "$user_shell" in
-    "bash")
-        config_file="$HOME/.bashrc"
-        ;;
-    "zsh")
-        config_file="$HOME/.zshrc"
-        ;;
-    *)
-        echo "Error: Unsupported shell: $user_shell"
-        exit 1
-        ;;
-esac
-
-echo "export CAIRN_MNT_DIR=\"$CAIRN_MNT_DIR\"" >> "$config_file"
-
-# Check if the variable is already defined in the configuration file
-if grep -q "export CAIRN_MNT_DIR=" "$config_file"; then
-    # If it exists, replace the existing definition
-    sed -i "s|^export CAIRN_MNT_DIR=.*$|export CAIRN_MNT_DIR=\"$CAIRN_MNT_DIR\"|" "$config_file"
-    echo "Environment variable replaced in $config_file."
-else
-    # If it doesn't exist, add the export statement
-    echo "export CAIRN_MNT_DIR=\"$CAIRN_MNT_DIR\"" >> "$config_file"
-    echo "Environment variable added to $config_file."
-fi
+# echo "Setting CAIRN_MNT_DIR in your shell..."
+# user_shell=$(basename "$SHELL")
+#
+# config_file=""
+# case "$user_shell" in
+#     "bash")
+#         config_file="$HOME/.bashrc"
+#         ;;
+#     "zsh")
+#         config_file="$HOME/.zshrc"
+#         ;;
+#     *)
+#         echo "Error: Unsupported shell: $user_shell"
+#         exit 1
+#         ;;
+# esac
+#
+# echo "export CAIRN_MNT_DIR=\"$CAIRN_MNT_DIR\"" >> "$config_file"
+#
+# # Check if the variable is already defined in the configuration file
+# if grep -q "export CAIRN_MNT_DIR=" "$config_file"; then
+#     # If it exists, replace the existing definition
+#     sed -i "s|^export CAIRN_MNT_DIR=.*$|export CAIRN_MNT_DIR=\"$CAIRN_MNT_DIR\"|" "$config_file"
+#     echo "Environment variable replaced in $config_file."
+# else
+#     # If it doesn't exist, add the export statement
+#     echo "export CAIRN_MNT_DIR=\"$CAIRN_MNT_DIR\"" >> "$config_file"
+#     echo "Environment variable added to $config_file."
+# fi
 
 if ! docker info >/dev/null 2>&1; then
 	echo "Docker is not running. Quitting."

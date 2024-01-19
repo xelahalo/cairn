@@ -8,7 +8,6 @@ use clap::{crate_version, Arg, Command};
 use env_logger::Builder;
 use error::AppError;
 use log::{LevelFilter};
-use std::io;
 use std::env;
 
 const CHROOT_DIR: &str = "/usr/src/fusemount";
@@ -64,15 +63,19 @@ fn main() -> Result<(), AppError> {
         None => panic!("No command provided"),
     };
 
-    let mnt_dir_var = env::var("CAIRN_MNT_DIR");
-    if mnt_dir_var.is_err() {
-        return Err(AppError::EnvVarError(io::Error::new(
-            io::ErrorKind::NotFound,
-            "CAIRN_MNT_DIR not set",
-        )));
-    }
+    let cmd_result = std::process::Command::new("time")
+    .args([
+        "docker",
+        "inspect",
+        "build-env",
+        "--format",
+        "\"{{ (index .Mounts 0).Source}}\"",
+    ])
+    .output()
+    .expect("Not able to query docker for mount directory");
 
-    let mnt_dir = mnt_dir_var.unwrap();
+    let mnt_dir = String::from_utf8_lossy(&cmd_result.stdout);
+    let mnt_dir_trimmed = mnt_dir.trim_matches(|c: char| c.is_whitespace() || c == '"');
 
     let cmd = command::Command::new(
         "docker",
@@ -86,7 +89,7 @@ fn main() -> Result<(), AppError> {
                 CHROOT_DIR,
                 parsed_cmd
                     .iter()
-                    .map(|s| s.trim_start_matches(&mnt_dir))
+                    .map(|s| s.trim_start_matches(mnt_dir_trimmed))
                     .collect::<Vec<&str>>()
                     .join(" ")
             )
@@ -94,7 +97,7 @@ fn main() -> Result<(), AppError> {
         ],
         &output_path,
         &options,
-        &mnt_dir,
+        &mnt_dir_trimmed,
     );
 
     // println!("Executing command: {:?}", cmd);
