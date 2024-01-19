@@ -29,15 +29,26 @@ def count_dirs(dir_path):
 
 # read the first command argument
 result_dir = sys.argv[1]
-names = ['local', 'docker', 'fuse_ll_docker', 'fuse_docker', 'fuse_cairn_exec_docker', 'fuse_cairn_docker', 'cairn']
-colors = ['green', 'blue', 'yellow', 'orange', 'pink', 'cyan','red']
+names = ['local', 'docker', 'fuse_ll_docker', 'fuse_docker', 'cairn_I', 'cairn_II', 'cairn_III', 'cairn_IV']
+colors = ['green', 'blue', 'darkblue', 'midnightblue', 'rosybrown', 'indianred','firebrick', 'darkred']
+labelmap = {
+    'local': 'Running command locally',
+    'docker': 'Running command in Docker',
+    'fuse_ll_docker': 'Running command in Docker on top of FUSE (lowlevel)',
+    'fuse_docker': 'Running command in Docker on top of FUSE',
+    'cairn_I': 'Running command on the Cairn FUSE layer',
+    'cairn_II': 'Running command on the Cairn FUSE layer (from host)',
+    'cairn_III': 'Running command on the Cairn FUSE layer (from host with chroot)',
+    'cairn_IV': 'Running the command with Cairn client',
+}
 
 for i in range(1, count_dirs(result_dir) + 1):
     for name in names:
+        print(name)
         result = glob.glob(f'{result_dir}/{i}/{name}*.json')
         x, y, std = load_data(result[0])
         color = colors[names.index(name)]
-        plt.errorbar(x, y, yerr=std, fmt='o', color=color, label=name)
+        plt.errorbar(x, y, yerr=std, fmt='o', color=color, label=labelmap[name])
         model = LinearRegression().fit(x.reshape(-1, 1), y)
         plt.plot(x, model.predict(x.reshape(-1, 1)), color=color, linestyle='dashed', linewidth=2)
 

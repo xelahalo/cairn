@@ -28,13 +28,42 @@ done
 
 shift $((OPTIND - 1))
 
-MNT_DIR=$1
-if [ -z "$MNT_DIR" ] || [[ "$MNT_DIR" != /* ]] ; then
+CAIRN_MNT_DIR=$1
+
+if [ -z "$CAIRN_MNT_DIR" ] || [[ "$CAIRN_MNT_DIR" != /* ]] ; then
     echo "Mount directory is required, needs to be a full path" 1>&2
     usage
 fi
 
-echo "Mounting directory: $MNT_DIR"
+echo "Setting CAIRN_MNT_DIR in your shell..."
+user_shell=$(basename "$SHELL")
+
+config_file=""
+case "$user_shell" in
+    "bash")
+        config_file="$HOME/.bashrc"
+        ;;
+    "zsh")
+        config_file="$HOME/.zshrc"
+        ;;
+    *)
+        echo "Error: Unsupported shell: $user_shell"
+        exit 1
+        ;;
+esac
+
+echo "export CAIRN_MNT_DIR=\"$CAIRN_MNT_DIR\"" >> "$config_file"
+
+# Check if the variable is already defined in the configuration file
+if grep -q "export CAIRN_MNT_DIR=" "$config_file"; then
+    # If it exists, replace the existing definition
+    sed -i "s|^export CAIRN_MNT_DIR=.*$|export CAIRN_MNT_DIR=\"$CAIRN_MNT_DIR\"|" "$config_file"
+    echo "Environment variable replaced in $config_file."
+else
+    # If it doesn't exist, add the export statement
+    echo "export CAIRN_MNT_DIR=\"$CAIRN_MNT_DIR\"" >> "$config_file"
+    echo "Environment variable added to $config_file."
+fi
 
 if ! docker info >/dev/null 2>&1; then
 	echo "Docker is not running. Quitting."
@@ -52,7 +81,7 @@ if [ "$BENCHMARK" = true ]; then
     --rm \
     --detach \
     --privileged \
-    --mount type=bind,source="${MNT_DIR}",target=/usr/src/dockermount,bind-propagation=rshared \
+    --mount type=bind,source="${CAIRN_MNT_DIR}",target=/usr/src/dockermount,bind-propagation=rshared \
     --cap-add SYS_ADMIN \
     --name "build-env-bench" \
     -it "build-env:bench" 
@@ -63,13 +92,13 @@ docker run \
 	--rm \
   --detach \
   --privileged \
-  --mount type=bind,source="${MNT_DIR}",target=/usr/src/dockermount,bind-propagation=rshared \
+  --mount type=bind,source="${CAIRN_MNT_DIR}",target=/usr/src/dockermount,bind-propagation=rshared \
 	--cap-add SYS_ADMIN \
 	--name "build-env" \
 	-it "build-env:test" 
 
 #-u "$(id -u):$(id -g)" \
-#-v "${MNT_DIR}":/usr/src/dockermount \
-#	--mount type=bind,source="$(pwd)/$MNT_DIR",target=/usr/src/dockermount,bind-propagation=slave \
+#-v "${CAIRN_MNT_DIR}":/usr/src/dockermount \
+#	--mount type=bind,source="$(pwd)/$CAIRN_MNT_DIR",target=/usr/src/dockermount,bind-propagation=slave \
 
 cd - || exit

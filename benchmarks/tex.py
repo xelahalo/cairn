@@ -19,7 +19,7 @@ def escape(string):
 
 
 result_dir = sys.argv[1]
-names = ['local', 'docker', 'fuse_ll_docker', 'fuse_docker', 'fuse_cairn_exec_docker', 'fuse_cairn_docker', 'cairn']
+names = ['local', 'docker', 'fuse_ll_docker', 'fuse_docker', 'cairn_I', 'cairn_II', 'cairn_III', 'cairn_IV']
 
 with open(f'{result_dir}/results.tex', 'w') as f:
     header = r"""
