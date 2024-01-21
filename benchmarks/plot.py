@@ -29,31 +29,45 @@ def count_dirs(dir_path):
 
 # read the first command argument
 result_dir = sys.argv[1]
-names = ['local', 'docker', 'fuse_ll_docker', 'fuse_docker', 'cairn_I', 'cairn_II', 'cairn_III', 'cairn_IV']
-colors = ['green', 'blue', 'darkblue', 'midnightblue', 'rosybrown', 'indianred','firebrick', 'darkred']
+names = ['local', 'docker', 'fuse_ll_docker', 'fuse_docker', 'cairn_I_', 'cairn_II_', 'cairn_III_', 'cairn_IV_', 'cairn_V_']
+colors = [
+        (0.00392156862745098, 0.45098039215686275, 0.6980392156862745),
+        (0.8705882352941177, 0.5607843137254902, 0.0196078431372549),
+        (0.00784313725490196, 0.6196078431372549, 0.45098039215686275),
+        (0.8352941176470589, 0.3686274509803922, 0.0),
+        (0.8, 0.47058823529411764, 0.7372549019607844),
+        (0.792156862745098, 0.5686274509803921, 0.3803921568627451),
+        (0.984313725490196, 0.6862745098039216, 0.8941176470588236),
+        (0.5803921568627451, 0.5803921568627451, 0.5803921568627451),
+        (0.9254901960784314, 0.8823529411764706, 0.2),
+        ]
+
 labelmap = {
-    'local': 'Running command locally',
-    'docker': 'Running command in Docker',
-    'fuse_ll_docker': 'Running command in Docker on top of FUSE (lowlevel)',
-    'fuse_docker': 'Running command in Docker on top of FUSE',
-    'cairn_I': 'Running command on the Cairn FUSE layer',
-    'cairn_II': 'Running command on the Cairn FUSE layer (from host)',
-    'cairn_III': 'Running command on the Cairn FUSE layer (from host with chroot)',
-    'cairn_IV': 'Running the command with Cairn client',
+    'local': 'Local',
+    'docker': 'Docker',
+    'fuse_ll_docker': 'Passthrough FUSE I',
+    'fuse_docker': 'Passthrough FUSE II',
+    'cairn_I_': 'Cairn I',
+    'cairn_II_': 'Cairn II',
+    'cairn_III_': 'Cairn III',
+    'cairn_IV_': 'Cairn IV',
+    'cairn_V_': 'Cairn V'
 }
 
 for i in range(1, count_dirs(result_dir) + 1):
     for name in names:
-        print(name)
         result = glob.glob(f'{result_dir}/{i}/{name}*.json')
+        if len(result) == 0:
+            continue
         x, y, std = load_data(result[0])
         color = colors[names.index(name)]
         plt.errorbar(x, y, yerr=std, fmt='o', color=color, label=labelmap[name])
         model = LinearRegression().fit(x.reshape(-1, 1), y)
+        color = colors[names.index(name)]
         plt.plot(x, model.predict(x.reshape(-1, 1)), color=color, linestyle='dashed', linewidth=2)
 
     # Add labels and legend
-    plt.xlabel('Number of iterations')
+    plt.xlabel('Number of command runs')
     plt.ylabel('Time (seconds)')
     plt.legend()
 

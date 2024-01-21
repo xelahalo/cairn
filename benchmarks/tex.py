@@ -19,7 +19,7 @@ def escape(string):
 
 
 result_dir = sys.argv[1]
-names = ['local', 'docker', 'fuse_ll_docker', 'fuse_docker', 'cairn_I', 'cairn_II', 'cairn_III', 'cairn_IV']
+names = ['local', 'docker', 'fuse_ll_docker', 'fuse_docker', 'cairn_I_', 'cairn_II_', 'cairn_III_', 'cairn_IV_', 'cairn_V_']
 
 with open(f'{result_dir}/results.tex', 'w') as f:
     header = r"""
@@ -29,7 +29,7 @@ with open(f'{result_dir}/results.tex', 'w') as f:
         l
        *{4}{>{\centering\arraybackslash}X}
     }\toprule
-    & {Local} & {Docker} & {Docker with FUSE} & {Cairn} \\\midrule
+    & {Local} & {Docker} & {Passthrough FUSE I} & {Passthrough FUSE II} & {Cairn I} & {Cairn II} & {Cairn II} & {Cairn III} & {Cairn IV} & {Cairn V}\\\midrule
 """
     footer = r"""    \bottomrule
     \end{tabularx}

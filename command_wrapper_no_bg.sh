@@ -41,9 +41,4 @@ if [ ! -d "$chroot_dir" ]; then
   exit 1
 fi
 
-(chroot "${chroot_dir}" /bin/bash -c "${cmd_args[*]}" ) &
-
-pid=$!
-
-wait "$pid"
-echo "$pid"
+(chroot "${chroot_dir}" /bin/bash -c "${cmd_args[*]}" )
