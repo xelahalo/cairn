@@ -179,15 +179,17 @@ struct TracerFS {
     root: String,
     attrs: BTreeMap<u64, InodeAttributes>,
     destroy: Sender<()>,
+    should_trace: bool,
 }
 
 impl TracerFS {
-    fn new(root: String, destroy: Sender<()>) -> TracerFS {
+    fn new(root: String, destroy: Sender<()>, should_trace: bool) -> TracerFS {
         {
             TracerFS {
                 root,
                 attrs: BTreeMap::new(),
                 destroy,
+                should_trace,
             }
         }
     }
@@ -336,11 +338,14 @@ impl Filesystem for TracerFS {
         debug!("forget(ino={}, nlookup={})", _ino, _nlookup);
     }
 
-    fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
+    fn getattr(&mut self, req: &Request, ino: u64, reply: ReplyAttr) {
         debug!("getattr(ino={})", ino);
 
         match self.attrs.get(&ino) {
             Some(attrs) => {
+                if self.should_trace {
+                    trace(req.pid(), 'q', vec![&attrs.real_path, "getattr"]);
+                }
                 reply.attr(&Duration::new(TTL, 0), &(*attrs).clone().into());
             }
             None => {
@@ -382,7 +387,9 @@ impl Filesystem for TracerFS {
                 return;
             }
 
-            trace(req.pid(), 'w', vec![&attrs.real_path, "chmod"]);
+            if self.should_trace {
+                trace(req.pid(), 'w', vec![&attrs.real_path, "chmod"]);
+            }
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -396,7 +403,9 @@ impl Filesystem for TracerFS {
         if uid.is_some() || gid.is_some() {
             debug!("chown() called with {:?} {:?} {:?}", ino, uid, gid);
 
-            trace(req.pid(), 'w', vec![&attrs.real_path, "chown"]);
+            if self.should_trace {
+                trace(req.pid(), 'w', vec![&attrs.real_path, "chown"]);
+            }
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -437,7 +446,9 @@ impl Filesystem for TracerFS {
                 },
             };
 
-            trace(req.pid(), 'w', vec![&attrs.real_path, "truncate"]);
+            if self.should_trace {
+                trace(req.pid(), 'w', vec![&attrs.real_path, "truncate"]);
+            }
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -452,7 +463,9 @@ impl Filesystem for TracerFS {
         if let Some(atime) = atime {
             debug!("utime() called with {:?} {:?}", ino, atime);
 
-            trace(req.pid(), 't', vec![&attrs.real_path, "utime"]);
+            if self.should_trace {
+                trace(req.pid(), 't', vec![&attrs.real_path, "utime"]);
+            }
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -473,7 +486,9 @@ impl Filesystem for TracerFS {
         if let Some(mtime) = mtime {
             debug!("utime() called with {:?} {:?}", ino, mtime);
 
-            trace(req.pid(), 't', vec![&attrs.real_path, "utime"]);
+            if self.should_trace {
+                trace(req.pid(), 't', vec![&attrs.real_path, "utime"]);
+            }
 
             self.handle_metadata_on_change(
                 &PathBuf::from(&attrs.real_path),
@@ -621,7 +636,10 @@ impl Filesystem for TracerFS {
         };
         let metadata = fs::metadata(path.clone());
 
-        trace(req.pid(), 'd', vec![&path.to_str().unwrap(), "unlink"]);
+        if self.should_trace {
+            trace(req.pid(), 'd', vec![&path.to_str().unwrap(), "unlink"]);
+        }
+
         self.handle_metadata_on_removal(metadata, fs::remove_file(path.clone()), reply);
     }
 
@@ -695,15 +713,17 @@ impl Filesystem for TracerFS {
             }
         };
 
-        trace(
-            req.pid(),
-            'm',
-            vec![
-                &path.to_str().unwrap(),
-                &newpath.to_str().unwrap(),
-                "rename",
-            ],
-        );
+        if self.should_trace {
+            trace(
+                req.pid(),
+                'm',
+                vec![
+                    &path.to_str().unwrap(),
+                    &newpath.to_str().unwrap(),
+                    "rename",
+                ],
+            );
+        }
 
         self.handle_metadata_on_change(
             &newpath,
@@ -788,9 +808,12 @@ impl Filesystem for TracerFS {
 
                     let file_handle = file.as_raw_fd() as u64;
 
-                    // access mode has already been checked, so we can safely default to a read trace
-                    let mode = if write { 'w' } else { 'r' };
-                    trace(req.pid(), mode, vec![&attrs.real_path, "open"]);
+                    if self.should_trace {
+                        // access mode has already been checked, so we can safely default to a read trace
+                        let mode = if write { 'w' } else { 'r' };
+                        trace(req.pid(), mode, vec![&attrs.real_path, "open"]);
+                    }
+
                     reply.opened(file_handle, 0);
                 } else {
                     reply.error(libc::EISDIR);
@@ -1031,7 +1054,7 @@ impl Filesystem for TracerFS {
         reply.ok();
     }
 
-    fn statfs(&mut self, req: &Request<'_>, ino: u64, reply: ReplyStatfs) {
+    fn statfs(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyStatfs) {
         debug!("statfs(ino={})", ino);
 
         let mut statfs: libc::statvfs = unsafe { std::mem::zeroed() };
@@ -1055,7 +1078,7 @@ impl Filesystem for TracerFS {
             libc::statvfs(fd.as_ptr() as *const i8, &mut statfs);
         }
 
-        trace(req.pid(), 'q', vec![&attrs.real_path, "statfs"]);
+        // trace(req.pid(), 'q', vec![&attrs.real_path, "statfs"]);
 
         reply.statfs(
             statfs.f_blocks.into(),
@@ -1233,23 +1256,32 @@ fn main() {
                 .help("Mountpoint for the filesystem")
                 .required(true),
         )
+        .arg(
+            Arg::new("trace")
+                .long("trace")
+                .help("Trace all I/O operations to a log file")
+                .action(clap::ArgAction::SetTrue),
+        )
         // .arg(Arg::new("v").short('v').help("Sets the level of verbosity"))
         .get_matches();
 
-    let level_filter = LevelFilter::Info;
+    let level_filter = LevelFilter::Debug;
     let root = matches.get_one::<String>("root").unwrap().to_string();
     let mountpoint = matches.get_one::<String>("mount-point").unwrap();
-    let target = Box::new(create_new(format!("{root}/tracer.log").as_str()).unwrap());
+    let should_trace = matches.get_flag("trace");
 
     if level_filter >= LevelFilter::Debug {
         File::create("1_parsed_matches").expect("Failed to create 1");
     }
 
-    Builder::new()
-        .format(get_logger_format())
-        .target(env_logger::Target::Pipe(target))
-        .filter_level(level_filter)
-        .init();
+    if should_trace {
+        let target = Box::new(create_new(format!("{root}/tracer.log").as_str()).unwrap());
+        Builder::new()
+            .format(get_logger_format())
+            .target(env_logger::Target::Pipe(target))
+            .filter_level(level_filter)
+            .init();
+    }
 
     if level_filter >= LevelFilter::Debug {
         File::create("2_init_logger").expect("Failed to create 2");
@@ -1276,7 +1308,7 @@ fn main() {
         MountOption::FSName("cairn-fuse".to_string()),
     ];
     let guard = match fuser::spawn_mount2(
-        TracerFS::new(root.clone(), destroy),
+        TracerFS::new(root.clone(), destroy, should_trace),
         mountpoint,
         mount_options.as_slice(),
     ) {
@@ -1320,7 +1352,7 @@ mod tests {
         let destroy = send.clone();
         thread::spawn(move || {
             let guard = fuser::spawn_mount2(
-                TracerFS::new(DIRS[0].to_string(), destroy),
+                TracerFS::new(DIRS[0].to_string(), destroy, true),
                 DIRS[1],
                 &mount_options,
             )

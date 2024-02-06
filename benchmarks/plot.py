@@ -6,7 +6,6 @@ import glob
 import json
 import os
 
-
 # read the json file which starts with 'local' 'docker' and 'cairn'
 def load_data(filename):
     iters = []
@@ -29,7 +28,16 @@ def count_dirs(dir_path):
 
 # read the first command argument
 result_dir = sys.argv[1]
-names = ['local', 'docker', 'fuse_ll_docker', 'fuse_docker', 'cairn_I_', 'cairn_II_', 'cairn_III_', 'cairn_IV_', 'cairn_V_']
+names = ['local', 
+         'docker',
+         'fuse_ll_docker', 
+         'fuse_docker', 
+         'cairn_fuse_no_trace_', 
+         'cairn_fuse_trace_', 
+         'cairn_II_', 
+         'cairn_III_', 
+         'cairn_IV_']
+
 colors = [
         (0.00392156862745098, 0.45098039215686275, 0.6980392156862745),
         (0.8705882352941177, 0.5607843137254902, 0.0196078431372549),
@@ -47,11 +55,11 @@ labelmap = {
     'docker': 'Docker',
     'fuse_ll_docker': 'Passthrough FUSE I',
     'fuse_docker': 'Passthrough FUSE II',
-    'cairn_I_': 'Cairn I',
+    'cairn_fuse_no_trace_': 'Cairn 0',
+    'cairn_fuse_trace_': 'Cairn I',
     'cairn_II_': 'Cairn II',
     'cairn_III_': 'Cairn III',
-    'cairn_IV_': 'Cairn IV',
-    'cairn_V_': 'Cairn V'
+    'cairn_IV_': 'Cairn IV'
 }
 
 for i in range(1, count_dirs(result_dir) + 1):
@@ -61,7 +69,7 @@ for i in range(1, count_dirs(result_dir) + 1):
             continue
         x, y, std = load_data(result[0])
         color = colors[names.index(name)]
-        plt.errorbar(x, y, yerr=std, fmt='o', color=color, label=labelmap[name])
+        plt.errorbar(x, y, yerr=std,fmt='o', color=color, label=labelmap[name])
         model = LinearRegression().fit(x.reshape(-1, 1), y)
         color = colors[names.index(name)]
         plt.plot(x, model.predict(x.reshape(-1, 1)), color=color, linestyle='dashed', linewidth=2)
@@ -72,4 +80,4 @@ for i in range(1, count_dirs(result_dir) + 1):
     plt.legend()
 
     # Save the plot as a PNG file
-    plt.savefig(f'{result_dir}/{i}/plot.png')
+    plt.savefig(f'{result_dir}/{i}/plot.svg')

@@ -39,36 +39,36 @@ jobs:
     - name: Stop the docker containers
       run: bash teardown.sh
 
-    - name: Clone rattle repo
-      run: |
-        mkdir rattle
-        git clone https://github.com/xelahalo/rattle.git ./rattle
-
-    - name: Set up Haskell
-      uses: haskell/actions/setup@v2
-      with:
-        ghc-version: 9.8.1
-        cabal-version: 3.10.1.0
-
-    - name: Run rattle benchmarks (cairn)
-      run: |
-        bash benchmarks/rattle-benchmark.sh
-        mv rattle/vsmake.log rattle/vsmake-cairn.log
-
-    - name: Build fsatrace
-      run: |
-        cargo uninstall fsatrace
-        mkdir -p fsatrace-original
-        git clone https://github.com/xelahalo/fsatrace.git ./fsatrace-original
-        cd fsatrace-original || exit 1
-        make
-        ln -s $(pwd)/fsatrace /usr/local/bin/fsatrace
-        cd - || exit 1
-
-    - name: Run rattle benchmarks (fsatrace)
-      run: |
-        bash benchmarks/rattle-benchmark.sh
-        mv rattle/vsmake.log rattle/vsmake-fsatrace.log
+#    - name: Clone rattle repo
+#      run: |
+#        mkdir rattle
+#        git clone https://github.com/xelahalo/rattle.git ./rattle
+#
+#    - name: Set up Haskell
+#      uses: haskell/actions/setup@v2
+#      with:
+#        ghc-version: 9.8.1
+#        cabal-version: 3.10.1.0
+#
+#    - name: Run rattle benchmarks (cairn)
+#      run: |
+#        bash benchmarks/rattle-benchmark.sh
+#        mv rattle/vsmake.log rattle/vsmake-cairn.log
+#
+#    - name: Build fsatrace
+#      run: |
+#        cargo uninstall fsatrace
+#        mkdir -p fsatrace-original
+#        git clone https://github.com/xelahalo/fsatrace.git ./fsatrace-original
+#        cd fsatrace-original || exit 1
+#        make
+#        ln -s $(pwd)/fsatrace /usr/local/bin/fsatrace
+#        cd - || exit 1
+#
+#    - name: Run rattle benchmarks (fsatrace)
+#      run: |
+#        bash benchmarks/rattle-benchmark.sh
+#        mv rattle/vsmake.log rattle/vsmake-fsatrace.log
 
     - name: Publish benchmark results
       if: success()
@@ -77,4 +77,4 @@ jobs:
         name: ${{ github.sha }} 
         path: |
           benchmarks/*.zip
-          rattle/*.log
+#          rattle/*.log

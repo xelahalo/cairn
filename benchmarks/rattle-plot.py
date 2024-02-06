@@ -1,4 +1,3 @@
-
 import matplotlib.pyplot as plt
 import sys
 import numpy as np
@@ -33,9 +32,6 @@ def plot_subplots(data_1, data_2, file_path):
         tmp = rattle_data_2[np.where(rattle_data_2[:, 2] == i)]
         rattle_means_2.append(np.mean(tmp[:, 3]))
 
-    plt.figure(figsize=(15, 10))
-    plt.title("Make vs Rattle(Cairn) vs Rattle(fsatrace)")
-
     make_means = np.array(make_means)[::-1]
     rattle_means_1 = np.array(rattle_means_1)[::-1]
     rattle_means_2 = np.array(rattle_means_2)[::-1]
@@ -48,12 +44,21 @@ def plot_subplots(data_1, data_2, file_path):
     # rattle_means_1 = rattle_means_1 / np.min(rattle_means_1)
     # rattle_means_2 = rattle_means_2 / np.min(rattle_means_2)
 
-    plt.plot(x, make_means, label='make')
-    plt.plot(x, rattle_means_1, label='rattle (cairn)')
-    plt.plot(x, rattle_means_2, label='rattle (fsatrace)')
+    colors = [
+        (0.00392156862745098, 0.45098039215686275, 0.6980392156862745),
+        (0.8705882352941177, 0.5607843137254902, 0.0196078431372549),
+        (0.00784313725490196, 0.6196078431372549, 0.45098039215686275),
+        ]
+
+    plt.plot(x, make_means, color=colors[0], label='make', linewidth=2)
+    plt.plot(x, rattle_means_1, color=colors[1],  label='rattle (cairn)', marker='o', linewidth=2)
+    plt.plot(x, rattle_means_2, color=colors[2], label='rattle (fsatrace)', marker='^', linewidth=2)
+
 
     plt.yscale('log')
-    plt.ylabel('Runtime (log scale)')
+    plt.ylabel('Average compile time (log scale)')
+    plt.xlabel('Commits from HEAD')
+    plt.xticks(x)
     plt.legend()
     plt.savefig(f'{file_path}.png')
 
