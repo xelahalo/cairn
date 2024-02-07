@@ -1224,21 +1224,32 @@ fn trace(
     paths.pop();
     let path_str = paths.join("|");
 
-    let ppid_result = std::process::Command::new("ps")
-        .args(&["-o", "ppid= ", &pid.to_string()])
-        .output();
-
-    let ppid: i32 = match ppid_result {
-        Ok(output) => {
-            let ppid_str = String::from_utf8_lossy(&output.stdout);
-            ppid_str.trim().parse::<i32>().unwrap_or_else(|_| -1)
-        }
+    let ppid: i32 = match get_ppid(pid) {
+        Ok(ppid) => ppid.try_into().unwrap(),
         Err(_) => -1,
     };
 
     let time = time_from_system_time(&SystemTime::now());
 
     info!("-> {}: {}|{}|{}|{}", time.0, pid, ppid, op, path_str)
+}
+
+fn get_ppid(pid: u32) -> io::Result<u32> {
+    let stat_path = format!("/proc/{}/stat", pid);
+    let stat_content = fs::read_to_string(stat_path)?;
+
+    let fields: Vec<&str> = stat_content.split_whitespace().collect();
+    if fields.len() >= 4 {
+        // The fourth field in /proc/<pid>/stat is the PPID
+        if let Ok(ppid) = fields[3].parse::<u32>() {
+            return Ok(ppid);
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "Invalid data in /proc/<pid>/stat",
+    ))
 }
 
 fn main() {
