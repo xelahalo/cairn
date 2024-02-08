@@ -87,7 +87,9 @@ for d in benchmarks/commands/*; do
 
      # STEP 3: Benchmark it in docker on top of FUSE (bad implementation)
      # docker exec build-env-bench mkdir -p /workdir
-     docker exec build-env-bench /bin/bash -c "cp -r -n /usr/src/dockermount/. /"
+     # docker exec build-env-bench /bin/bash -c "cp -r -n /usr/src/dockermount/. /"
+     #
+     docker exec build-env-bench find /usr/src/dockermount -type f -exec cp -f {} / \;
 
      docker exec build-env-bench /bin/bash -c "cd /usr/src/app/mnt/ && chmod +x run.sh && \
        if [ \"$EXECUTABLE\" = \"stress\" ]; then \
@@ -110,7 +112,7 @@ for d in benchmarks/commands/*; do
      echo "-----------------------------------------"
 
      # STEP 4: Benchmark it in docker on top of FUSE (most optimal implementation)
-     docker exec build-env-bench /bin/bash -c "cp -r -n /usr/src/dockermount/. /"
+     # docker exec build-env-bench /bin/bash -c "cp -r -n /usr/src/dockermount/. /"
 
      # without chroot
      docker exec build-env-bench /bin/bash -c "cd /usr/src/app/mnt_ll/ && chmod +x run.sh && \
