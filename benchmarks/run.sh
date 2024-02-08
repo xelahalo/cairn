@@ -86,10 +86,10 @@ for d in benchmarks/commands/*; do
      echo "-----------------------------------------"
 
      # STEP 3: Benchmark it in docker on top of FUSE (bad implementation)
-     docker exec build-env-bench mkdir -p /workdir
-     docker exec build-env-bench /bin/bash -c "cp -r -n /usr/src/dockermount/. /workdir/"
+     # docker exec build-env-bench mkdir -p /workdir
+     docker exec build-env-bench /bin/bash -c "cp -r -n /usr/src/dockermount/. /"
 
-     docker exec build-env-bench /bin/bash -c "cd /usr/src/app/mnt/workdir && chmod +x run.sh && \
+     docker exec build-env-bench /bin/bash -c "cd /usr/src/app/mnt/ && chmod +x run.sh && \
        if [ \"$EXECUTABLE\" = \"stress\" ]; then \
          hyperfine --warmup 3 --parameter-scan iter $START $END -D $RANGE './run.sh {iter}' --export-json fuse_docker_$BENCHMARK_NAME.json; \
        else \
@@ -98,25 +98,22 @@ for d in benchmarks/commands/*; do
 
      # with chroot and docker exec
      if [ "$EXECUTABLE" = "stress" ]; then
-       hyperfine --warmup 3 --parameter-scan iter "$START" "$END" -D "$RANGE" 'docker exec build-env-bench /bin/bash -c "./command_wrapper.sh /usr/src/app/mnt '\''cd workdir && ./run.sh {iter}'\''"' --export-json fuse_chroot_$BENCHMARK_NAME.json
+       hyperfine --warmup 3 --parameter-scan iter "$START" "$END" -D "$RANGE" 'docker exec build-env-bench /bin/bash -c "./command_wrapper.sh /usr/src/app/mnt ./run.sh {iter}"' --export-json fuse_chroot_$BENCHMARK_NAME.json
      else
-       hyperfine --warmup 3 'docker exec build-env-bench /bin/bash -c "./command_wrapper.sh /usr/src/app/mnt '\''cd workdir && ./run.sh'\''"' --export-json fuse_chroot_$BENCHMARK_NAME.json
+       hyperfine --warmup 3 'docker exec build-env-bench /bin/bash -c "./command_wrapper.sh /usr/src/app/mnt ./run.sh"' --export-json fuse_chroot_$BENCHMARK_NAME.json
      fi
 
-     docker exec build-env-bench cp /workdir/fuse_chroot_$BENCHMARK_NAME.json /usr/src/dockermount/
-     docker exec build-env-bench cp /workdir/fuse_docker_$BENCHMARK_NAME.json /usr/src/dockermount/
-     docker exec build-env-bench find /workdir -delete
+     docker exec build-env-bench cp /fuse_docker_$BENCHMARK_NAME.json /usr/src/dockermount/
 
      echo "-----------------------------------------"
      echo "Benchmarking in Docker on FUSE(II)..."
      echo "-----------------------------------------"
 
      # STEP 4: Benchmark it in docker on top of FUSE (most optimal implementation)
-     docker exec build-env-bench mkdir -p /workdir
-     docker exec build-env-bench /bin/bash -c "cp -r -n /usr/src/dockermount/. /workdir/"
+     docker exec build-env-bench /bin/bash -c "cp -r -n /usr/src/dockermount/. /"
 
      # without chroot
-     docker exec build-env-bench /bin/bash -c "cd /usr/src/app/mnt_ll/workdir && chmod +x run.sh && \
+     docker exec build-env-bench /bin/bash -c "cd /usr/src/app/mnt_ll/ && chmod +x run.sh && \
        if [ \"$EXECUTABLE\" = \"stress\" ]; then \
          hyperfine --warmup 3 --parameter-scan iter $START $END -D $RANGE './run.sh {iter}' --export-json fuse_ll_docker_$BENCHMARK_NAME.json; \
        else \
@@ -125,14 +122,12 @@ for d in benchmarks/commands/*; do
 
      # with chroot and docker exec
      if [ "$EXECUTABLE" = "stress" ]; then
-       hyperfine --warmup 3 --parameter-scan iter "$START" "$END" -D "$RANGE" 'docker exec build-env-bench /bin/bash -c "./command_wrapper.sh /usr/src/app/mnt_ll '\''cd workdir && ./run.sh {iter}'\''"' --export-json fuse_ll_chroot_$BENCHMARK_NAME.json
+       hyperfine --warmup 3 --parameter-scan iter "$START" "$END" -D "$RANGE" 'docker exec build-env-bench /bin/bash -c "./command_wrapper.sh /usr/src/app/mnt_ll ./run.sh {iter}"' --export-json fuse_ll_chroot_$BENCHMARK_NAME.json
      else
-       hyperfine --warmup 3 'docker exec build-env-bench /bin/bash -c "./command_wrapper.sh /usr/src/app/mnt_ll '\''cd workdir && ./run.sh'\''"' --export-json fuse_ll_chroot_$BENCHMARK_NAME.json
+       hyperfine --warmup 3 'docker exec build-env-bench /bin/bash -c "./command_wrapper.sh /usr/src/app/mnt_ll ./run.sh"' --export-json fuse_ll_chroot_$BENCHMARK_NAME.json
      fi
 
-     docker exec build-env-bench cp /workdir/fuse_ll_docker_$BENCHMARK_NAME.json /usr/src/dockermount/
-     docker exec build-env-bench cp /workdir/fuse_ll_chroot_$BENCHMARK_NAME.json /usr/src/dockermount/
-     docker exec build-env-bench find /workdir -delete
+     docker exec build-env-bench cp /fuse_ll_docker_$BENCHMARK_NAME.json /usr/src/dockermount/
 
      echo "-----------------------------------------"
      echo "Benchmarking in Docker on FUSE(III)..."
@@ -203,9 +198,15 @@ for d in benchmarks/commands/*; do
       echo "Cleaning up..."
       echo "----------------------------------------------------"
 
+      # locally
 			find host_mnt -mindepth 1 -maxdepth 1 \
         ! -name bin ! -name dev ! -name etc ! -name 'lib*' ! -name proc ! -name sys ! -name usr ! -name tracer.log \
         -exec rm -r {} +
+
+      # from bench container
+      docker exec build-env-bench find / -mindepth 1 -maxdepth 1 ! -name bin ! -name dev ! -name etc ! -name 'lib*' \
+        ! -name proc ! -name sys ! -name usr ! -name tmp ! -name home ! -name mnt ! -name run ! -name srv \ 
+        ! -name var ! -name tmp ! -name boot ! -name media ! -name opt ! -name root -exec rm -r {} +
 		fi
 	done
 done
